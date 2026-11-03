@@ -1,20 +1,24 @@
-# ZX Bank RAG Application
+��# ZX Bank RAG Application
 
 End-to-end RAG application for ZX Bank using **LangChain**, **Ollama** (Qwen3 4B LLM + Qwen3-Embedding 4B), **Qdrant** (vector database), **FastAPI** (backend), and **React** (frontend).
+
+---
 
 ## Tech Stack
 
 | Layer | Technology |
 |-------|-----------|
 | Language | Python 3.13+ |
-| LLM Framework | LangChain (1.4.7) |
-| LLM | Ollama — qwen3:4b |
-| Embeddings | Ollama — qwen3-embedding:4b |
+| LLM Framework | LangChain 1.4.7 |
+| LLM | Ollama — `qwen3:4b` |
+| Embeddings | Ollama — `qwen3-embedding:4b` |
 | Vector DB | Qdrant |
 | Backend | FastAPI + Uvicorn |
-| Frontend | React |
-| Evaluation | RAGAS + custom metrics (Recall@K, Precision@K, MRR, nDCG, faithfulness, answer relevancy, correctness) |
-| Container | Docker (Qdrant deployment) |
+| Frontend | React + Vite |
+| Evaluation | RAGAS + custom metrics (Recall@K, Precision@K, MRR, nDCG, faithfulness, answer relevancy, correctness|
+| Container | Docker (Qdrant|
+
+---
 
 ## Project Structure
 
@@ -44,6 +48,8 @@ zx-bank-rag/
 └── README.md
 ```
 
+---
+
 ## Git Branching Strategy (3 branches only)
 
 | Branch | Purpose |
@@ -54,40 +60,60 @@ zx-bank-rag/
 
 No other branches are created. No major features are developed directly on `main`.
 
+---
+
 ## Prerequisites
 
-- **Python 3.13+** with `.venv` activated
+- **Python 3.13+** with a virtual environment activated
 - **Ollama** running at `http://localhost:11434` with models:
-  - `qwen3:4b`
-  - `qwen3-embedding:4b`
-- **Qdrant** running at `http://localhost:6333` (or via Docker)
+  ```bash
+  ollama pull qwen3:4b
+  ollama pull qwen3-embedding:4b
+  ```
+- **Qdrant** running at `http://localhost:6333` (via Docker)
 
-## Setup
+---
 
-### 1. Clone / open the project
+## Step-by-Step Setup
 
-The dataset is already present at `dataset/ZX Bank/`. Do not modify, move, or delete it.
+### 1. Clone the repository
+
+```bash
+git clone <your-repo-url>
+cd "ZX Bank Project"
+```
 
 ### 2. Configure environment
 
 ```bash
 cp .env.example .env
-# Edit .env if your Ollama/Qdrant URLs differ
 ```
+Edit `.env` if your Ollama/Qdrant URLs differ from the defaults.
 
-### 3. Install dependencies
+### 3. Install Python dependencies
 
 ```bash
+python -m venv .venv
+.venv\Scripts\activate          # Windows
+# or
+source .venv/bin/activate       # Mac/Linux
+
 python -m pip install -r requirements.txt
 ```
 
-### 4. Start Qdrant (via Docker)
+### 4. Start Qdrant (with persistent storage)
+
+Create a local storage folder and run Qdrant with a volume so your data survives restarts:
 
 ```bash
-docker run -p 6333:6333 qdrant/qdrant
+mkdir qdrant_storage
+docker run -d -p 6333:6333 -v ${PWD}/qdrant_storage:/qdrant/storage qdrant/qdrant
 ```
 
-Or use your existing local Qdrant instance.
+Verify Qdrant is up:
+```bash
+curl http://localhost:6333/collections
+```
 
 ### 5. Pull Ollama models
 
@@ -96,37 +122,86 @@ ollama pull qwen3:4b
 ollama pull qwen3-embedding:4b
 ```
 
-## Running the Application
+### 6. Ingest documents into Qdrant
 
-### Step 1: Ingest documents into Qdrant
-
-```bash
-python scripts/ingest.py --chunk-size 400 --chunk-overlap 40
-```
-
-This loads all PDF/HTML/DOCX/PPTX/MD files from `dataset/ZX Bank/`, cleans them, splits into chunks, generates embeddings with `qwen3-embedding:4b`, and upserts into Qdrant. Re-running is idempotent (deterministic content-hash IDs).
-
-### Step 2: Start the FastAPI backend
+Run this once (or whenever you add new documents / change chunk settings):
 
 ```bash
-uvicorn src.api.server:app --reload --port 8000
+$env:PYTHONPATH="C:\Users\Param\Desktop\ZX Bank Project"; python scripts/ingest.py --chunk-size 400 --chunk-overlap 40
 ```
+
+On Mac/Linux:
+```bash
+PYTHONPATH="." python scripts/ingest.py --chunk-size 400 --chunk-overlap 40
+```
+
+### 7. Start the FastAPI backend
+
+Terminal 1:
+```bash
+$env:PYTHONPATH="C:\Users\Param\Desktop\ZX Bank Project"; python -m uvicorn src.api.server:app --reload --port 8000
+```
+
+Verify: open http://localhost:8000/health — should return JSON with `"status":"ok"`.
 
 API docs: http://localhost:8000/docs
 
-### Step 3: Ask questions
+### 8. Start the React frontend
 
+Terminal 2:
+```bash
+cd frontend
+npm install          # first time only
+npm run dev
+```
+
+Open **http://localhost:5173** and start chatting.
+
+---
+
+## Daily Workflow (after first setup)
+
+You don't need to re-ingest every time. With the persistent Qdrant volume, your vectors survive restarts.
+
+| Step | Command |
+|------|---------|
+| Start Qdrant | `docker start <container_name>` or re-run the `docker run` command above |
+| Start backend | `python -m uvicorn src.api.server:app --reload --port 8000` |
+| Start frontend | `cd frontend && npm run dev` |
+
+---
+
+## API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/` | GET | API info |
+| `/health` | GET | Qdrant and collection status |
+| `/collections` | GET | List Qdrant collections |
+| `/ask` | POST | Ask a question, get grounded answer + sources |
+| `/documents/upload` | POST | Upload a document for ingestion |
+| `/conversations/{session_id}` | DELETE | Clear chat history |
+
+Example request:
 ```bash
 curl -X POST http://localhost:8000/ask \
   -H "Content-Type: application/json" \
   -d '{"question": "Where is ZX Bank headquartered?", "k": 4}'
 ```
 
-### Step 4: React frontend
+---
 
-See `frontend/` for the chat interface setup and run instructions.
+## Running Tests
 
-### Step 5: Run evaluation
+```bash
+python -m pytest tests/ -v
+```
+
+---
+
+## Evaluation
+
+Run retrieval + generation metrics against the benchmark:
 
 ```bash
 python -c "
@@ -137,15 +212,15 @@ print(report.generation)
 "
 ```
 
-## Key Design Decisions
-
-- **Embedding dimension is probed at runtime** from `qwen3-embedding:4b` (observed: 2560) rather than hardcoded, ensuring indexing and query vectors match.
-- **Same embedding model** is used for indexing and querying.
-- **Deterministic point IDs** (UUID v5 from content hash) make re-indexing idempotent.
-- **Direct `QdrantClient.query_points`** is used for retrieval so it works regardless of Qdrant's HNSW index threshold.
-- **`langchain-community` loaders are avoided** (package is being sunset); format-specific libraries (pypdf, beautifulsoup4, docx2txt, python-pptx) are used directly and wrapped in LangChain `Document` objects.
+---
 
 ## Git Rules
 
-- Do not commit `dataset/`, `.env`, `.venv/`, Qdrant storage, or generated secrets.
-- `.gitignore` excludes `.env`, `.venv`, `__pycache__`, `dataset/ZX Bank`, pytest cache.
+- Do **not** commit `dataset/`, `.env`, `.venv/`, Qdrant storage, or generated secrets.
+- `.gitignore` excludes `.env`, `.venv`, `__pycache__`, `dataset/ZX Bank`, pytest cache, and `frontend/node_modules`.
+
+---
+
+## Learning Notes
+
+See `LEARNING_NOTES.md` for explanations of LangChain concepts: Document objects, loaders, text splitters, embeddings, vector stores, retrievers, ChatPromptTemplate, MessagesPlaceholder, LCEL, conversational RAG, and evaluation metrics.
