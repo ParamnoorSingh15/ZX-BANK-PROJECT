@@ -1,0 +1,20 @@
+# LangChain core
+langchain
+langchain-core
+langchain-community
+
+# Ollama integration
+langchain-ollama
+
+# Qdrant integration
+langchain-qdrant
+qdrant-client
+
+# Environment configuration
+python-dotenv
+
+# Initial document parsing
+pypdf
+docx2txt
+beautifulsoup4
+python-pptx
