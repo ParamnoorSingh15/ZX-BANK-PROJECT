@@ -30,8 +30,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from src.config.settings import get_settings
-from src.chains import BasicRAGChain, ConversationalRAGChain
-from src.retrieval.retrievers import get_retriever
+from src.chains import BasicRAGChain, ConversationalRAGChain, extract_sources
+from src.retrieval.retrievers import get_retriever, reset_corpus_cache
 from src.vectorstore.qdrant_store import (
     get_qdrant_client,
     get_vector_store,
@@ -74,8 +74,8 @@ def _get_basic_chain() -> BasicRAGChain:
     global _basic_chain
     if _basic_chain is None:
         _basic_chain = BasicRAGChain(
-            retriever_strategy="dense",
-            k=4,
+            retriever_strategy=settings.retrieval_strategy,
+            k=settings.retrieval_k,
             collection_name=settings.qdrant_collection,
         )
     return _basic_chain
@@ -85,8 +85,8 @@ def _get_conv_chain() -> ConversationalRAGChain:
     global _conv_chain
     if _conv_chain is None:
         _conv_chain = ConversationalRAGChain(
-            retriever_strategy="dense",
-            k=4,
+            retriever_strategy=settings.retrieval_strategy,
+            k=settings.retrieval_k,
             collection_name=settings.qdrant_collection,
         )
     return _conv_chain
@@ -98,8 +98,8 @@ def _get_conv_chain() -> ConversationalRAGChain:
 
 class AskRequest(BaseModel):
     question: str
-    strategy: str = "dense"
-    k: int = 4
+    strategy: str = "hybrid"
+    k: int = 8
     use_conversation: bool = False
     session_id: Optional[str] = None
 
@@ -110,6 +110,7 @@ class SourceRef(BaseModel):
     format: str
     page: Optional[int] = None
     slide: Optional[int] = None
+    section: Optional[str] = None
     chunk_index: Optional[int] = None
     content_preview: str
 
@@ -119,6 +120,7 @@ class AskResponse(BaseModel):
     sources: List[SourceRef]
     strategy: str
     k: int
+    session_id: Optional[str] = None
 
 
 class HealthResponse(BaseModel):
@@ -194,47 +196,55 @@ def list_collections():
 
 @app.post("/ask", response_model=AskResponse)
 def ask(req: AskRequest):
-    """Ask a question and get a grounded answer with source citations."""
+    """Ask a question and get a detailed, grounded answer with citations."""
     try:
-        if req.use_conversation and req.session_id:
-            chain = _get_conv_chain()
-            history = CHAT_HISTORY.get(req.session_id, [])
+        session_id = req.session_id
+        if req.use_conversation and not session_id:
+            import uuid
+
+            session_id = str(uuid.uuid4())
+
+        if req.use_conversation and session_id:
+            if (
+                req.strategy != settings.retrieval_strategy
+                or req.k != settings.retrieval_k
+            ):
+                chain = ConversationalRAGChain(
+                    retriever_strategy=req.strategy,
+                    k=req.k,
+                    collection_name=settings.qdrant_collection,
+                )
+            else:
+                chain = _get_conv_chain()
+            history = CHAT_HISTORY.get(session_id, [])
             answer, docs = chain.invoke(req.question, chat_history=history)
-            # Update history
-            CHAT_HISTORY[req.session_id] = history + [
+            # Keep only the recent turns so the prompt does not grow forever.
+            CHAT_HISTORY[session_id] = (history + [
                 ("user", req.question),
                 ("assistant", answer),
-            ]
+            ])[-12:]
         else:
-            chain = _get_basic_chain()
-            # Override strategy/k if requested
-            if req.strategy != "dense" or req.k != 4:
+            if (
+                req.strategy != settings.retrieval_strategy
+                or req.k != settings.retrieval_k
+            ):
                 chain = BasicRAGChain(
                     retriever_strategy=req.strategy,
                     k=req.k,
                     collection_name=settings.qdrant_collection,
                 )
+            else:
+                chain = _get_basic_chain()
             answer, docs = chain.invoke(req.question)
 
-        sources = [
-            SourceRef(
-                title=d.metadata.get("title", "unknown") if d.metadata else "unknown",
-                source=d.metadata.get("source", "") if d.metadata else "",
-                format=d.metadata.get("format", "") if d.metadata else "",
-                page=d.metadata.get("page") if d.metadata else None,
-                slide=d.metadata.get("slide") if d.metadata else None,
-                chunk_index=d.metadata.get("chunk_index") if d.metadata else None,
-                content_preview=d.page_content[:200],
-            )
-            for d in docs
-            if d.page_content.strip()
-        ]
+        sources = [SourceRef(**source) for source in extract_sources(docs)]
 
         return AskResponse(
             answer=answer,
             sources=sources,
             strategy=req.strategy,
             k=req.k,
+            session_id=session_id,
         )
     except HTTPException:
         raise
@@ -279,6 +289,9 @@ def upload_document(file: UploadFile = File(...)):
             collection_name=settings.qdrant_collection,
             embeddings=embeddings,
         )
+        # The hybrid retriever caches payloads in memory; refresh it so the new
+        # document is immediately searchable.
+        reset_corpus_cache(settings.qdrant_collection)
         return UploadResponse(
             filename=filename,
             chunks_indexed=added,

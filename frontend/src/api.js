@@ -6,14 +6,21 @@ export async function askQuestion(question, options = {}) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       question,
-      strategy: options.strategy || 'dense',
-      k: options.k || 4,
+      strategy: options.strategy || 'hybrid',
+      k: options.k || 8,
       use_conversation: options.use_conversation || false,
       session_id: options.session_id || null,
     }),
   })
   if (!response.ok) {
-    throw new Error(`API error: ${response.status}`)
+    let detail = `API error: ${response.status}`
+    try {
+      const body = await response.json()
+      if (body.detail) detail = body.detail
+    } catch {
+      // Keep the status code message when the body is not JSON.
+    }
+    throw new Error(detail)
   }
   return response.json()
 }
@@ -26,7 +33,14 @@ export async function uploadDocument(file) {
     body: formData,
   })
   if (!response.ok) {
-    throw new Error(`Upload error: ${response.status}`)
+    let detail = `Upload error: ${response.status}`
+    try {
+      const body = await response.json()
+      if (body.detail) detail = body.detail
+    } catch {
+      // Keep the status code message.
+    }
+    throw new Error(detail)
   }
   return response.json()
 }
@@ -37,4 +51,9 @@ export async function getHealth() {
     throw new Error(`Health error: ${response.status}`)
   }
   return response.json()
+}
+
+export async function clearConversation(sessionId) {
+  if (!sessionId) return
+  await fetch(`${API_BASE}/conversations/${sessionId}`, { method: 'DELETE' })
 }

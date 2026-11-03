@@ -14,23 +14,23 @@ Key LangChain classes used:
     * RunnableParallel      - runs retrieval and question-passing in parallel
     * RunnablePassthrough   - passes a field through unchanged
     * RunnableLambda        - wraps plain Python functions as runnables
-    * StrOutputParser       - extracts the string content from an LLM message
+    * StrOutputParser        - extracts the string content from an LLM message
+
+Why the Qwen3 settings matter:
+    Qwen3 is a reasoning model. Its "thinking" tokens are generated before the
+    final answer. If ``num_predict`` (output budget) is too small, the model
+    spends the entire budget thinking and returns an empty answer. If thinking
+    is disabled on this Ollama build, the raw chain-of-thought leaks into the
+    answer text instead. We therefore keep reasoning ON and give it a generous
+    context/output budget (see ``src/config/settings.py``).
 
 Information flow (basic RAG):
     {question}
-        --> RunnableParallel({
-              context: retriever | format_docs,
-              question: RunnablePassthrough(),
-              chat_history: RunnablePassthrough(),
-            })
+        --> HybridRetriever (dense + BM25, dedupe, neighbour expansion)
+        --> format_docs_with_sources()
         --> ChatPromptTemplate (system + history + question)
         --> ChatOllama(qwen3:4b)
-        --> StrOutputParser
-    --> {answer, sources}
-
-Information flow (context construction):
-    [Document(page_content, metadata)] --> format_docs()
-        --> "Source: title (p. N)\ncontent\n\nSource: ..."
+        --> {answer, sources}
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ from langchain_core.runnables import (
 from langchain_core.output_parsers import StrOutputParser
 from langchain_ollama import ChatOllama
 
-from src.config.settings import get_settings
+from src.config.settings import Settings, get_settings
 from src.retrieval.retrievers import get_retriever
 from src.prompts import get_rag_prompt
 
@@ -55,7 +55,7 @@ from src.prompts import get_rag_prompt
 def format_docs_with_sources(docs: List[Document]) -> str:
     """Format retrieved documents into a context string with citations.
 
-    Each chunk is prefixed with its source title and page/slide number so the
+    Each chunk is prefixed with its source title, section and page/slide so the
     LLM can cite specific documents in its answer.
     """
     if not docs:
@@ -64,10 +64,12 @@ def format_docs_with_sources(docs: List[Document]) -> str:
     for i, doc in enumerate(docs):
         meta = doc.metadata or {}
         title = meta.get("title", "unknown")
-        source = meta.get("source", "")
+        section = meta.get("section")
         page = meta.get("page")
         slide = meta.get("slide")
         loc = []
+        if section and section != title:
+            loc.append(f'"{section}"')
         if page is not None:
             loc.append(f"p. {page}")
         if slide is not None:
@@ -88,10 +90,20 @@ def format_docs_plain(docs: List[Document]) -> str:
 
 
 def extract_sources(docs: List[Document]) -> List[Dict[str, Any]]:
-    """Extract source metadata from retrieved documents for API responses."""
+    """Extract unique source metadata from retrieved documents for the API."""
     sources = []
+    seen = set()
     for doc in docs:
         meta = doc.metadata or {}
+        key = (
+            meta.get("title"),
+            meta.get("page"),
+            meta.get("slide"),
+            meta.get("section"),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
         sources.append(
             {
                 "title": meta.get("title", "unknown"),
@@ -99,40 +111,50 @@ def extract_sources(docs: List[Document]) -> List[Dict[str, Any]]:
                 "format": meta.get("format", ""),
                 "page": meta.get("page"),
                 "slide": meta.get("slide"),
+                "section": meta.get("section"),
                 "chunk_index": meta.get("chunk_index"),
-                "content_preview": doc.page_content[:200],
+                "content_preview": doc.page_content[:300],
             }
         )
     return sources
 
 
-class BasicRAGChain:
-    """Single-turn RAG chain: question -> answer with sources.
+def _build_llm(
+    settings: Settings,
+    model: Optional[str] = None,
+    base_url: Optional[str] = None,
+) -> ChatOllama:
+    """Create a ChatOllama client with reasoning-friendly defaults."""
+    return ChatOllama(
+        model=model or settings.llm_model,
+        base_url=base_url or settings.ollama_base_url,
+        temperature=settings.llm_temperature,
+        reasoning=settings.llm_reasoning,
+        num_ctx=settings.llm_num_ctx,
+        num_predict=settings.llm_num_predict,
+    )
 
-    Uses LCEL: retrieval + question pass-through in parallel, then prompt +
-    LLM + output parser.
-    """
+
+class BasicRAGChain:
+    """Single-turn RAG chain: question -> detailed answer with sources."""
 
     def __init__(
         self,
-        retriever_strategy: str = "dense",
-        k: int = 4,
+        retriever_strategy: str = "hybrid",
+        k: int = 8,
         collection_name: Optional[str] = None,
         model: Optional[str] = None,
         base_url: Optional[str] = None,
     ) -> None:
         settings = get_settings()
+        self.settings = settings
         self.retriever = get_retriever(
             strategy=retriever_strategy,
             k=k,
             collection_name=collection_name,
         )
         self.prompt = get_rag_prompt()
-        self.llm = ChatOllama(
-            model=model or settings.llm_model,
-            base_url=base_url or settings.ollama_base_url,
-            temperature=0,
-        )
+        self.llm = _build_llm(settings, model, base_url)
         self.chain = self._build_chain()
 
     def _build_chain(self):
@@ -150,6 +172,26 @@ class BasicRAGChain:
             | StrOutputParser()
         )
 
+    def _invoke_with_retry(self, messages) -> str:
+        """Invoke the LLM; retry with a larger budget if the answer is empty."""
+        response = self.llm.invoke(messages)
+        answer = response.content if hasattr(response, "content") else str(response)
+        answer = (answer or "").strip()
+        if answer:
+            return answer
+
+        # Reasoning consumed the whole output budget. Retry once with more room.
+        retry_llm = self.llm.bind(
+            num_predict=max(self.settings.llm_num_predict * 2, 6144),
+            num_ctx=max(self.settings.llm_num_ctx * 2, 32768),
+        )
+        response = retry_llm.invoke(messages)
+        answer = response.content if hasattr(response, "content") else str(response)
+        return (answer or "").strip() or (
+            "I could not produce an answer from the retrieved documents. "
+            "Please try rephrasing the question."
+        )
+
     def invoke(self, question: str) -> Tuple[str, List[Document]]:
         """Run the chain and return (answer, retrieved_documents).
 
@@ -163,8 +205,7 @@ class BasicRAGChain:
             question=question,
             chat_history=[],
         )
-        response = self.llm.invoke(messages)
-        answer = response.content if hasattr(response, "content") else str(response)
+        answer = self._invoke_with_retry(messages)
         return answer, docs
 
 
@@ -177,23 +218,38 @@ class ConversationalRAGChain:
 
     def __init__(
         self,
-        retriever_strategy: str = "dense",
-        k: int = 4,
+        retriever_strategy: str = "hybrid",
+        k: int = 8,
         collection_name: Optional[str] = None,
         model: Optional[str] = None,
         base_url: Optional[str] = None,
     ) -> None:
         settings = get_settings()
+        self.settings = settings
         self.retriever = get_retriever(
             strategy=retriever_strategy,
             k=k,
             collection_name=collection_name,
         )
         self.prompt = get_rag_prompt()
-        self.llm = ChatOllama(
-            model=model or settings.llm_model,
-            base_url=base_url or settings.ollama_base_url,
-            temperature=0,
+        self.llm = _build_llm(settings, model, base_url)
+
+    def _invoke_with_retry(self, messages) -> str:
+        response = self.llm.invoke(messages)
+        answer = response.content if hasattr(response, "content") else str(response)
+        answer = (answer or "").strip()
+        if answer:
+            return answer
+
+        retry_llm = self.llm.bind(
+            num_predict=max(self.settings.llm_num_predict * 2, 6144),
+            num_ctx=max(self.settings.llm_num_ctx * 2, 32768),
+        )
+        response = retry_llm.invoke(messages)
+        answer = response.content if hasattr(response, "content") else str(response)
+        return (answer or "").strip() or (
+            "I could not produce an answer from the retrieved documents. "
+            "Please try rephrasing the question."
         )
 
     def invoke(
@@ -226,6 +282,5 @@ class ConversationalRAGChain:
             question=question,
             chat_history=history_messages,
         )
-        response = self.llm.invoke(messages)
-        answer = response.content if hasattr(response, "content") else str(response)
+        answer = self._invoke_with_retry(messages)
         return answer, docs

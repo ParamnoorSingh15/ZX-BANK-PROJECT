@@ -206,6 +206,29 @@ def add_chunks(
     return added
 
 
+def reset_collection(
+    client: Optional[QdrantClient] = None,
+    collection_name: Optional[str] = None,
+) -> bool:
+    """Delete a collection so a re-ingestion starts from a clean slate.
+
+    This is used by ``scripts/ingest.py --reset``. Without it, changing the
+    chunk size leaves the old chunks in place alongside the new ones, which
+    pollutes retrieval with stale fragments.
+
+    Returns True if a collection was deleted, False if it did not exist.
+    """
+    settings = get_settings()
+    name = collection_name or settings.qdrant_collection
+    if client is None:
+        client = get_qdrant_client()
+    existing = {c.name for c in client.get_collections().collections}
+    if name not in existing:
+        return False
+    client.delete_collection(collection_name=name)
+    return True
+
+
 def get_vector_store(
     client: Optional[QdrantClient] = None,
     embeddings=None,

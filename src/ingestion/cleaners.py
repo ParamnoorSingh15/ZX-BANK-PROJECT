@@ -20,6 +20,9 @@ from langchain_core.documents import Document
 
 def clean_text(text: str) -> str:
     """Normalise whitespace and strip line-level clutter from a text block."""
+    # PowerPoint uses vertical-tab (\v / \x0b) as an in-paragraph line break.
+    # Normalise it to a regular newline so it is treated like other line breaks.
+    text = text.replace("\v", "\n").replace("\x0b", "\n")
     # Collapse 3+ newlines into a single blank line (paragraph break).
     text = re.sub(r"\n{3,}", "\n\n", text)
     # Collapse runs of spaces/tabs into a single space.
