@@ -16,6 +16,18 @@ export default function App() {
   const inputRef = useRef(null)
   const messagesEndRef = useRef(null)
 
+  const exampleQuestions = [
+    'Where is ZX Bank headquartered?',
+    'What are the savings account features?',
+    'What is Zia in the mobile app?',
+    'Does ZX Bank offer home loans?',
+  ]
+
+  const handleExampleClick = (q) => {
+    setInput(q)
+    inputRef.current?.focus()
+  }
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
@@ -141,8 +153,16 @@ export default function App() {
         <div className="chat-area">
           {messages.length === 0 && (
             <div className="empty-state">
+              <div className="empty-icon">🏦</div>
               <h3>Ask me about ZX Bank</h3>
-              <p>Try: "Where is ZX Bank headquartered?" or "What are the savings account features?"</p>
+              <p>Grounded answers from ZX Bank documents with source citations.</p>
+              <div className="example-chips">
+                {exampleQuestions.map((q, i) => (
+                  <div key={i} className="example-chip" onClick={() => handleExampleClick(q)}>
+                    {q}
+                  </div>
+                ))}
+              </div>
             </div>
           )}
           {messages.map((msg, i) => (
@@ -181,7 +201,7 @@ export default function App() {
               <option value="mmr">MMR (diverse)</option>
               <option value="filtered">Filtered</option>
             </select>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem', color: '#6b7280', cursor: 'pointer' }}>
+            <label className="conversation-toggle">
               <input
                 type="checkbox"
                 checked={useConversation}
@@ -199,35 +219,36 @@ export default function App() {
               disabled={loading}
             />
             <button className="send-btn" onClick={handleSubmit} disabled={loading}>
-              {loading ? 'Asking...' : 'Ask'}
+              {loading ? 'Asking…' : 'Ask'}
             </button>
           </div>
-          <input
-            type="file"
-            accept=".pdf,.html,.docx,.pptx,.md"
-            onChange={handleFileChange}
-            style={{ display: 'none' }}
-          />
-          <button
-            onClick={() => document.querySelector('input[type=file]').click()}
-            style={{
-              marginTop: '0.75rem',
-              background: 'transparent',
-              border: 'none',
-              color: '#3b82f6',
-              cursor: 'pointer',
-              fontSize: '0.85rem',
-              fontWeight: 500,
-              textDecoration: 'underline',
-            }}
-          >
-            Upload a document
-          </button>
+          <div style={{ marginTop: '0.75rem', maxWidth: 1000, margin: '0 auto 0 auto', display: 'flex', justifyContent: 'center' }}>
+            <label className="upload-btn">
+              📎 Upload a document
+              <input
+                type="file"
+                accept=".pdf,.html,.docx,.pptx,.md"
+                onChange={handleFileChange}
+                style={{ display: 'none' }}
+              />
+            </label>
+          </div>
 
-          <div className={`status-bar ${status?.status === 'ok' ? 'ok' : 'err'}`}>
-            {status
-              ? `Qdrant: ${status.status} &bull; ${status.collection_exists ? 'collection ready' : 'no collection'} &bull; ${status.vector_count || 0} vectors`
-              : 'Connecting...'}
+          <div className={`status-bar ${status?.status === 'ok' ? 'ok' : status?.status === 'error' ? 'err' : 'connecting'}`}>
+            {status ? (
+              <>
+                <span className="status-dot" aria-hidden="true">●</span>
+                {status.status === 'ok' ? (
+                  <>
+                    Qdrant connected &nbsp;•&nbsp; {status.collection_exists ? 'collection ready' : 'no collection'} &nbsp;•&nbsp; {status.vector_count || 0} vectors
+                  </>
+                ) : (
+                  <span>Backend unreachable — start the FastAPI server</span>
+                )}
+              </>
+            ) : (
+              <span>Connecting…</span>
+            )}
           </div>
         </div>
       </div>
