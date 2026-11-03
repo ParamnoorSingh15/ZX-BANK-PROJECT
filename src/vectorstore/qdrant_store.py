@@ -143,10 +143,15 @@ def add_chunks(
     for chunk in chunks:
         chunk.metadata["content_hash"] = content_hash(chunk.page_content)
 
+    # Skip empty chunks (no usable text).
+    filtered = [
+        chunk for chunk in chunks if chunk.page_content.strip()
+    ]
+
     if skip_duplicates:
         existing = _existing_hashes(client, name)
         filtered = [
-            chunk for chunk in chunks
+            chunk for chunk in filtered
             if chunk.metadata["content_hash"] not in existing
         ]
     else:

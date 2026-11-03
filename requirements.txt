@@ -21,3 +21,11 @@ python-pptx
 
 # Testing
 pytest
+
+# FastAPI backend
+fastapi
+uvicorn
+python-multipart
+
+# Evaluation
+ragas
