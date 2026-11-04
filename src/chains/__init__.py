@@ -135,6 +135,24 @@ def _build_llm(
     )
 
 
+def _build_retry_llm(settings: Settings) -> ChatOllama:
+    """Build a new ChatOllama instance with a larger output budget for retry.
+
+    We cannot use ``llm.bind(num_predict=..., num_ctx=...)`` because
+    langchain-ollama passes bound kwargs straight to the ollama
+    ``client.chat()`` method, which rejects ``num_predict`` as an
+    unexpected keyword argument. Creating a fresh instance avoids that.
+    """
+    return ChatOllama(
+        model=settings.llm_model,
+        base_url=settings.ollama_base_url,
+        temperature=settings.llm_temperature,
+        reasoning=settings.llm_reasoning,
+        num_ctx=max(settings.llm_num_ctx * 2, 32768),
+        num_predict=max(settings.llm_num_predict * 2, 6144),
+    )
+
+
 class BasicRAGChain:
     """Single-turn RAG chain: question -> detailed answer with sources."""
 
@@ -172,6 +190,10 @@ class BasicRAGChain:
             | StrOutputParser()
         )
 
+    def _build_retry_llm(self) -> ChatOllama:
+        """Build a new ChatOllama instance with a larger output budget for retry."""
+        return _build_retry_llm(self.settings)
+
     def _invoke_with_retry(self, messages) -> str:
         """Invoke the LLM; retry with a larger budget if the answer is empty."""
         response = self.llm.invoke(messages)
@@ -181,10 +203,7 @@ class BasicRAGChain:
             return answer
 
         # Reasoning consumed the whole output budget. Retry once with more room.
-        retry_llm = self.llm.bind(
-            num_predict=max(self.settings.llm_num_predict * 2, 6144),
-            num_ctx=max(self.settings.llm_num_ctx * 2, 32768),
-        )
+        retry_llm = self._build_retry_llm()
         response = retry_llm.invoke(messages)
         answer = response.content if hasattr(response, "content") else str(response)
         return (answer or "").strip() or (
@@ -234,6 +253,10 @@ class ConversationalRAGChain:
         self.prompt = get_rag_prompt()
         self.llm = _build_llm(settings, model, base_url)
 
+    def _build_retry_llm(self) -> ChatOllama:
+        """Build a new ChatOllama instance with a larger output budget for retry."""
+        return _build_retry_llm(self.settings)
+
     def _invoke_with_retry(self, messages) -> str:
         response = self.llm.invoke(messages)
         answer = response.content if hasattr(response, "content") else str(response)
@@ -241,10 +264,7 @@ class ConversationalRAGChain:
         if answer:
             return answer
 
-        retry_llm = self.llm.bind(
-            num_predict=max(self.settings.llm_num_predict * 2, 6144),
-            num_ctx=max(self.settings.llm_num_ctx * 2, 32768),
-        )
+        retry_llm = self._build_retry_llm()
         response = retry_llm.invoke(messages)
         answer = response.content if hasattr(response, "content") else str(response)
         return (answer or "").strip() or (
