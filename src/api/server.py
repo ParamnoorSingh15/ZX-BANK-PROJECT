@@ -38,6 +38,9 @@ from src.vectorstore.qdrant_store import (
     add_chunks,
     ensure_collection,
     content_hash,
+    create_temp_collection,
+    delete_temp_collection,
+    get_temp_collection_name,
 )
 from src.ingestion.pipeline import load_and_split_dataset
 from src.ingestion.loaders import load_document
@@ -196,13 +199,23 @@ def list_collections():
 
 @app.post("/ask", response_model=AskResponse)
 def ask(req: AskRequest):
-    """Ask a question and get a detailed, grounded answer with citations."""
+    """Ask a question and get a detailed, grounded answer with citations.
+
+    When ``session_id`` is provided and the session has uploaded documents,
+    those documents are searched alongside the main knowledge base via an
+    ephemeral collection ``zx_bank_uploads_<session_id>``.
+    """
     try:
         session_id = req.session_id
         if req.use_conversation and not session_id:
             import uuid
 
             session_id = str(uuid.uuid4())
+
+        # Build list of extra collections to search (session uploads).
+        extra_collections: List[str] = []
+        if session_id:
+            extra_collections.append(get_temp_collection_name(session_id))
 
         if req.use_conversation and session_id:
             if (
@@ -213,9 +226,15 @@ def ask(req: AskRequest):
                     retriever_strategy=req.strategy,
                     k=req.k,
                     collection_name=settings.qdrant_collection,
+                    extra_collections=extra_collections,
                 )
             else:
-                chain = _get_conv_chain()
+                chain = ConversationalRAGChain(
+                    retriever_strategy=settings.retrieval_strategy,
+                    k=settings.retrieval_k,
+                    collection_name=settings.qdrant_collection,
+                    extra_collections=extra_collections,
+                )
             history = CHAT_HISTORY.get(session_id, [])
             answer, docs = chain.invoke(req.question, chat_history=history)
             # Keep only the recent turns so the prompt does not grow forever.
@@ -232,9 +251,15 @@ def ask(req: AskRequest):
                     retriever_strategy=req.strategy,
                     k=req.k,
                     collection_name=settings.qdrant_collection,
+                    extra_collections=extra_collections,
                 )
             else:
-                chain = _get_basic_chain()
+                chain = BasicRAGChain(
+                    retriever_strategy=settings.retrieval_strategy,
+                    k=settings.retrieval_k,
+                    collection_name=settings.qdrant_collection,
+                    extra_collections=extra_collections,
+                )
             answer, docs = chain.invoke(req.question)
 
         sources = [SourceRef(**source) for source in extract_sources(docs)]
@@ -253,10 +278,18 @@ def ask(req: AskRequest):
 
 
 @app.post("/documents/upload", response_model=UploadResponse)
-def upload_document(file: UploadFile = File(...)):
+def upload_document(
+    file: UploadFile = File(...),
+    session_id: Optional[str] = Form(None),
+):
     """Upload a document, ingest it, and index its chunks into Qdrant.
 
     Supports .pdf, .html, .docx, .pptx, .md files.
+
+    When ``session_id`` is provided, chunks are indexed into an ephemeral
+    collection ``zx_bank_uploads_<session_id>`` that is deleted when the
+    conversation ends. Without ``session_id``, chunks go into the main
+    ``zx_bank_knowledge`` collection.
     """
     filename = file.filename or "uploaded"
     ext = os.path.splitext(filename)[1].lower()
@@ -282,20 +315,30 @@ def upload_document(file: UploadFile = File(...)):
             chunk_size=settings.chunk_size,
             chunk_overlap=settings.chunk_overlap,
         )
+
+        # Determine target collection.
+        if session_id:
+            target_collection = create_temp_collection(session_id)
+        else:
+            target_collection = settings.qdrant_collection
+
         # Index into Qdrant.
         embeddings = get_embeddings()
         added = add_chunks(
             chunks,
-            collection_name=settings.qdrant_collection,
+            collection_name=target_collection,
             embeddings=embeddings,
         )
-        # The hybrid retriever caches payloads in memory; refresh it so the new
-        # document is immediately searchable.
-        reset_corpus_cache(settings.qdrant_collection)
+
+        # Refresh corpus cache so the new chunks are immediately searchable.
+        reset_corpus_cache(target_collection)
+        if session_id:
+            reset_corpus_cache(settings.qdrant_collection)
+
         return UploadResponse(
             filename=filename,
             chunks_indexed=added,
-            collection=settings.qdrant_collection,
+            collection=target_collection,
         )
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=str(exc))
@@ -308,5 +351,15 @@ def upload_document(file: UploadFile = File(...)):
 
 @app.delete("/conversations/{session_id}")
 def clear_conversation(session_id: str):
+    """Clear chat history and delete the session's temporary upload collection.
+
+    Any documents uploaded during this conversation are removed from Qdrant
+    so they do not persist or leak into other conversations.
+    """
     CHAT_HISTORY.pop(session_id, None)
-    return {"status": "cleared", "session_id": session_id}
+    deleted = delete_temp_collection(session_id)
+    return {
+        "status": "cleared",
+        "session_id": session_id,
+        "temp_collection_deleted": deleted,
+    }

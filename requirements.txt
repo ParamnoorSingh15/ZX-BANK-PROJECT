@@ -15,6 +15,7 @@ python-dotenv
 
 # Initial document parsing
 pypdf
+pdfplumber
 docx2txt
 beautifulsoup4
 python-pptx

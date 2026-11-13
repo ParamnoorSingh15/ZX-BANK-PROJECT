@@ -229,6 +229,69 @@ def reset_collection(
     return True
 
 
+def get_temp_collection_name(session_id: str) -> str:
+    """Return the Qdrant collection name for an ephemeral session upload.
+
+    Format: ``zx_bank_uploads_<session_id>``
+    """
+    safe_session = session_id.replace("-", "_")
+    return f"zx_bank_uploads_{safe_session}"
+
+
+def create_temp_collection(
+    session_id: str,
+    client: Optional[QdrantClient] = None,
+    embeddings=None,
+) -> str:
+    """Create (or verify) a temporary Qdrant collection for a session upload.
+
+    The collection is named ``zx_bank_uploads_<session_id>`` and is meant to
+    hold chunks from documents uploaded during that conversation only. It is
+    deleted when the conversation ends.
+
+    Returns the collection name.
+    """
+    settings = get_settings()
+    name = get_temp_collection_name(session_id)
+    if client is None:
+        client = get_qdrant_client()
+    if embeddings is None:
+        embeddings = get_embeddings()
+    ensure_collection(client, embeddings, name)
+    return name
+
+
+def delete_temp_collection(
+    session_id: str,
+    client: Optional[QdrantClient] = None,
+) -> bool:
+    """Delete the temporary upload collection for a session.
+
+    Returns True if a collection was deleted, False if it did not exist.
+    """
+    settings = get_settings()
+    name = get_temp_collection_name(session_id)
+    if client is None:
+        client = get_qdrant_client()
+    existing = {c.name for c in client.get_collections().collections}
+    if name not in existing:
+        return False
+    client.delete_collection(collection_name=name)
+    return True
+
+
+def list_temp_collections(
+    client: Optional[QdrantClient] = None,
+) -> List[str]:
+    """List all temporary upload collections."""
+    if client is None:
+        client = get_qdrant_client()
+    all_collections = {c.name for c in client.get_collections().collections}
+    return sorted(
+        name for name in all_collections if name.startswith("zx_bank_uploads_")
+    )
+
+
 def get_vector_store(
     client: Optional[QdrantClient] = None,
     embeddings=None,

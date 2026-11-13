@@ -317,7 +317,13 @@ def _expand_with_neighbours(
 
 
 class HybridRetriever(BaseRetriever):
-    """Dense vector search + BM25, merged, deduplicated and context-expanded."""
+    """Dense vector search + BM25, merged, deduplicated and context-expanded.
+
+    Searches the main Qdrant collection plus any number of ephemeral session
+    upload collections (e.g. ``zx_bank_uploads_<session_id>``). Dense search is
+    run on every collection; BM25 keyword scoring is built from the main
+    collection corpus only.
+    """
 
     k: int = Field(default=8)
     fetch_k: int = Field(default=40)
@@ -325,6 +331,7 @@ class HybridRetriever(BaseRetriever):
     expand_neighbors: bool = Field(default=True)
     max_per_title: int = Field(default=3)
     collection_name: Optional[str] = None
+    extra_collections: List[str] = Field(default_factory=list)
 
     def _get_relevant_documents(
         self, query: str, *, run_manager: CallbackManagerForRetrieverRun
@@ -337,29 +344,52 @@ class HybridRetriever(BaseRetriever):
         query_vector = embeddings.embed_query(query)
         query_tokens = _tokenize(query)
 
-        # 1) Dense candidates from Qdrant.
-        dense_hits = client.query_points(
-            collection_name=name,
-            query=query_vector,
-            limit=max(self.fetch_k, self.k),
-            with_payload=True,
-            with_vectors=False,
-        ).points
+        # Collect all collections to search: main + session uploads.
+        all_collections: List[str] = [name] + [
+            c for c in self.extra_collections if c != name
+        ]
 
+        # Dense candidates from every collection.
+        dense_by_collection: Dict[str, List] = {}
+        for coll in all_collections:
+            try:
+                hits = client.query_points(
+                    collection_name=coll,
+                    query=query_vector,
+                    limit=max(self.fetch_k, self.k),
+                    with_payload=True,
+                    with_vectors=False,
+                ).points
+            except Exception:
+                # Collection may not exist yet.
+                hits = []
+            dense_by_collection[coll] = hits
+
+        # Build corpus + BM25 from the main collection only.
         corpus = _get_corpus(name)
-
-        # 2) Keyword candidates from BM25 over the same payloads.
         bm25_scores = corpus.bm25.scores(query_tokens) if query_tokens else {}
         top_keyword = sorted(
             bm25_scores.items(), key=lambda item: item[1], reverse=True
         )[: self.fetch_k]
 
-        candidate_ids: Set[str] = {str(hit.id) for hit in dense_hits}
+        # Candidate IDs from dense hits across all collections.
+        candidate_ids: Set[str] = set()
+        for hits in dense_by_collection.values():
+            candidate_ids.update(str(hit.id) for hit in hits)
+        # Candidate IDs from BM25 (main collection only).
         candidate_ids.update(corpus.records[index].id for index, _ in top_keyword)
 
-        # 3) Normalise and merge both signals.
-        dense_by_id = {str(hit.id): float(hit.score) for hit in dense_hits}
-        max_dense = max(dense_by_id.values(), default=0.0) or 1.0
+        # Normalise dense scores per collection, then merge.
+        dense_by_id: Dict[str, float] = {}
+        max_dense = 0.0
+        for coll, hits in dense_by_collection.items():
+            for hit in hits:
+                cid = str(hit.id)
+                score = float(hit.score)
+                dense_by_id[cid] = max(dense_by_id.get(cid, 0.0), score)
+                max_dense = max(max_dense, score)
+        max_dense = max_dense or 1.0
+
         max_keyword = max((score for _, score in top_keyword), default=0.0) or 1.0
 
         query_token_set = set(query_tokens)
@@ -392,10 +422,10 @@ class HybridRetriever(BaseRetriever):
 
         scored.sort(key=lambda item: item[0], reverse=True)
 
-        # 4) Remove duplicates and cap per document.
+        # Remove duplicates and cap per document.
         selected = _dedupe_select(scored, self.k, self.max_per_title)
 
-        # 5) Give the LLM the whole section, not an isolated fragment.
+        # Give the LLM the whole section, not an isolated fragment.
         if self.expand_neighbors:
             selected = _expand_with_neighbours(
                 corpus,
@@ -548,6 +578,7 @@ def get_retriever(
     strategy: str = "hybrid",
     k: int = 8,
     collection_name: Optional[str] = None,
+    extra_collections: Optional[List[str]] = None,
     **kwargs,
 ) -> BaseRetriever:
     """Factory to build a retriever by strategy name.
@@ -555,11 +586,14 @@ def get_retriever(
     Args:
         strategy: One of "hybrid", "dense", "mmr", "filtered".
         k: Number of documents to return.
-        collection_name: Qdrant collection name.
+        collection_name: Qdrant collection name (main collection).
+        extra_collections: Additional collections to search (e.g. session
+            upload collections ``zx_bank_uploads_<session_id>``).
         **kwargs: Strategy-specific options (e.g. filter for "filtered",
             fetch_k/lambda_mult for "mmr", keyword_weight for "hybrid").
     """
     settings = get_settings()
+    extra = extra_collections or []
 
     if strategy == "dense":
         return DenseRetriever(k=k, collection_name=collection_name)
@@ -593,4 +627,5 @@ def get_retriever(
             "max_per_title", settings.retrieval_max_per_title
         ),
         collection_name=collection_name,
+        extra_collections=extra,
     )

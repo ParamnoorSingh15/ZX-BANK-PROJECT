@@ -33,7 +33,8 @@ function formatSourceMeta(source) {
 export default function App() {
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [askLoading, setAskLoading] = useState(false)
+  const [uploading, setUploading] = useState(false)
   const [strategy, setStrategy] = useState('hybrid')
   const [sessionId, setSessionId] = useState(null)
   const [status, setStatus] = useState(null)
@@ -45,16 +46,16 @@ export default function App() {
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, loading])
+  }, [messages, askLoading, uploading])
 
   useEffect(() => {
-    if (!loading) {
+    if (!askLoading) {
       setElapsed(0)
       return undefined
     }
     const timer = setInterval(() => setElapsed((value) => value + 1), 1000)
     return () => clearInterval(timer)
-  }, [loading])
+  }, [askLoading])
 
   useEffect(() => {
     let mounted = true
@@ -83,13 +84,13 @@ export default function App() {
   const handleSubmit = async (e) => {
     e.preventDefault()
     const question = input.trim()
-    if (!question || loading) return
+    if (!question || askLoading || uploading) return
 
     const userMsg = { role: 'user', content: question, sources: [] }
     setMessages((prev) => [...prev, userMsg])
     setInput('')
     setError(null)
-    setLoading(true)
+    setAskLoading(true)
 
     try {
       const data = await askQuestion(question, {
@@ -118,7 +119,7 @@ export default function App() {
         },
       ])
     } finally {
-      setLoading(false)
+      setAskLoading(false)
       inputRef.current?.focus()
     }
   }
@@ -141,10 +142,11 @@ export default function App() {
   const handleFileChange = async (e) => {
     const file = e.target.files[0]
     if (!file) return
-    setLoading(true)
+    setUploading(true)
     setError(null)
     try {
-      const result = await uploadDocument(file)
+      const result = await uploadDocument(file, sessionId || undefined)
+      if (result.session_id) setSessionId(result.session_id)
       setMessages((prev) => [
         ...prev,
         {
@@ -161,7 +163,7 @@ export default function App() {
     } catch (err) {
       setError(err.message)
     } finally {
-      setLoading(false)
+      setUploading(false)
       e.target.value = ''
     }
   }
@@ -323,7 +325,7 @@ export default function App() {
             </div>
           ))}
 
-          {loading && (
+          {askLoading && (
             <div className="message bot">
               <div className="avatar">Zia</div>
               <div className="message-content thinking-bubble">
@@ -337,6 +339,24 @@ export default function App() {
                   <span>
                     Qwen3 is reasoning over the retrieved context
                     {elapsed > 0 ? ` · ${elapsed}s` : ''}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+          {uploading && (
+            <div className="message bot">
+              <div className="avatar">Zia</div>
+              <div className="message-content thinking-bubble">
+                <div className="typing" aria-hidden="true">
+                  <span />
+                  <span />
+                  <span />
+                </div>
+                <div className="thinking-copy">
+                  <strong>Indexing uploaded document…</strong>
+                  <span>
+                    Extracting text, tables and embedding chunks into Qdrant
                   </span>
                 </div>
               </div>
@@ -396,11 +416,11 @@ export default function App() {
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) handleSubmit(e)
               }}
-              disabled={loading}
+              disabled={askLoading || uploading}
             />
 
-            <button className="send-btn" type="submit" disabled={loading}>
-              {loading ? 'Thinking…' : 'Ask'}
+            <button className="send-btn" type="submit" disabled={askLoading || uploading}>
+              {askLoading ? 'Thinking…' : uploading ? 'Indexing…' : 'Ask'}
             </button>
           </form>
 
