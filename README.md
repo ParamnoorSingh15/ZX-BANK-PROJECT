@@ -317,7 +317,176 @@ Stop-Process -Id <pid>
 
 ---
 
+## Docker Deployment
+
+The application is fully containerized with Docker Compose. Four services run
+on a dedicated network: **frontend**, **backend**, **qdrant**, and **ollama**.
+
+### Prerequisites
+
+- **Docker Desktop** (includes Docker Compose)
+- **~8 GB RAM** (Qwen3 models are ~2.5 GB each)
+- **Git** for cloning the repository
+
+### Required Environment Variables
+
+Copy `.env.example` to `.env` and adjust as needed:
+
+```bash
+cp .env.example .env
+```
+
+Key variables (see `.env.example` for all options):
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `OLLAMA_BASE_URL` | `http://ollama:11434` | Ollama service URL (Docker service name) |
+| `LLM_MODEL` | `qwen3:4b` | Generation model |
+| `EMBEDDING_MODEL` | `qwen3-embedding:4b` | Embedding model |
+| `QDRANT_URL` | `http://qdrant:6333` | Qdrant service URL (Docker service name) |
+| `QDRANT_COLLECTION` | `zx_bank_knowledge` | Vector collection name |
+| `CHUNK_SIZE` | `1600` | Characters per chunk |
+| `RETRIEVAL_K` | `8` | Chunks after deduplication |
+
+### Docker Architecture
+
+```
+┌─────────────┐      ┌──────────────┐      ┌─────────────┐
+│  Frontend   │──────│   Backend    │──────│   Qdrant    │
+│  Nginx:8080 │      │ FastAPI:8000 │      │ Vector DB:  │
+│  (React)    │      │   Python     │      │  6333       │
+└─────────────┘      └──────────────┘      └─────────────┘
+       │                    │                   ▲
+       │                    └───────────────────┘
+       │                     Ollama:11434
+       ▼                    (LLM + Embeddings)
+   Browser
+```
+
+- **Frontend**: React + Vite build served by Nginx, proxies `/api` → backend
+- **Backend**: FastAPI + Uvicorn, connects to Qdrant and Ollama via service names
+- **Qdrant**: Vector database with persistent `qdrant_data` volume
+- **Ollama**: LLM server with persistent `ollama_data` volume (models persist)
+
+### Build Commands
+
+```bash
+# Validate configuration
+docker compose config
+
+# Build all images
+docker compose build
+```
+
+### Startup Commands
+
+```bash
+# Start all services
+docker compose up -d
+
+# Check service status
+docker compose ps
+
+# View logs
+docker compose logs -f backend
+docker compose logs -f frontend
+docker compose logs -f qdrant
+docker compose logs -f ollama
+```
+
+### Ollama Model Installation
+
+Models are **not** downloaded automatically on startup. After starting the
+containers, pull the required models:
+
+```bash
+docker compose exec ollama ollama pull qwen3:4b
+docker compose exec ollama ollama pull qwen3-embedding:4b
+
+# Verify
+docker compose exec ollama ollama list
+```
+
+Models persist in the `ollama_data` named volume across container restarts.
+
+### Application Access URLs
+
+| Service | URL |
+|---------|-----|
+| Frontend UI | http://localhost:8080 |
+| Backend API | http://localhost:8000 |
+| API Docs | http://localhost:8000/docs |
+| Qdrant | http://localhost:6333 |
+| Ollama API | http://localhost:11434 |
+
+### Container Management
+
+```bash
+# Restart all services
+docker compose restart
+
+# Restart a specific service
+docker compose restart backend
+
+# Stop all services (preserves data)
+docker compose stop
+
+# Stop and remove containers (preserves named volumes)
+docker compose down
+
+# Stop and remove everything INCLUDING named volumes (DELETES DATA)
+docker compose down -v
+```
+
+### Logs and Troubleshooting
+
+```bash
+# View all logs
+docker compose logs
+
+# View specific service logs
+docker compose logs -f backend
+docker compose logs -f frontend
+docker compose logs -f qdrant
+docker compose logs -f ollama
+```
+
+### Persistent Volumes
+
+| Volume | Purpose | Survives `docker compose down`? | Survives `docker compose down -v`? |
+|--------|---------|---------------------------------|------------------------------------|
+| `qdrant_data` | Qdrant vectors and collections | Yes | **No** (deleted) |
+| `ollama_data` | Ollama models and blobs | Yes | **No** (deleted) |
+
+**Warning:** `docker compose down -v` removes named volumes and will delete
+all Qdrant vectors and Ollama models. Use `docker compose down` (without `-v`)
+for normal shutdowns to preserve data.
+
+### PDF Upload Behavior
+
+Uploaded PDFs are processed temporarily and **deleted after indexing**. The
+extracted text chunks are stored in Qdrant (persistent in `qdrant_data`).
+Uploaded documents are indexed into session-scoped collections
+(`zx_bank_uploads_<session_id>`) and are deleted when the conversation is
+cleared. No persistent upload directory is used.
+
+### Shutdown Instructions
+
+```bash
+# Normal shutdown (preserves all data)
+docker compose down
+
+# Complete cleanup (DELETES all vectors and models)
+docker compose down -v
+```
+
+---
+
 ## Git Rules
+
+- Do **not** commit `dataset/`, `.env`, `.venv/`, `qdrant_storage/`,
+  `frontend/node_modules`, or generated secrets.
+- `.gitignore` already excludes these paths.
 
 - Do **not** commit `dataset/`, `.env`, `.venv/`, `qdrant_storage/`,
   `frontend/node_modules`, or generated secrets.
