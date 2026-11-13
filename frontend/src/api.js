@@ -25,9 +25,12 @@ export async function askQuestion(question, options = {}) {
   return response.json()
 }
 
-export async function uploadDocument(file) {
+export async function uploadDocument(file, sessionId = null) {
   const formData = new FormData()
   formData.append('file', file)
+  if (sessionId) {
+    formData.append('session_id', sessionId)
+  }
   const response = await fetch(`${API_BASE}/documents/upload`, {
     method: 'POST',
     body: formData,

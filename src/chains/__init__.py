@@ -161,15 +161,18 @@ class BasicRAGChain:
         retriever_strategy: str = "hybrid",
         k: int = 8,
         collection_name: Optional[str] = None,
+        extra_collections: Optional[List[str]] = None,
         model: Optional[str] = None,
         base_url: Optional[str] = None,
     ) -> None:
         settings = get_settings()
         self.settings = settings
+        self.extra_collections = extra_collections or []
         self.retriever = get_retriever(
             strategy=retriever_strategy,
             k=k,
             collection_name=collection_name,
+            extra_collections=self.extra_collections,
         )
         self.prompt = get_rag_prompt()
         self.llm = _build_llm(settings, model, base_url)
@@ -240,15 +243,18 @@ class ConversationalRAGChain:
         retriever_strategy: str = "hybrid",
         k: int = 8,
         collection_name: Optional[str] = None,
+        extra_collections: Optional[List[str]] = None,
         model: Optional[str] = None,
         base_url: Optional[str] = None,
     ) -> None:
         settings = get_settings()
         self.settings = settings
+        self.extra_collections = extra_collections or []
         self.retriever = get_retriever(
             strategy=retriever_strategy,
             k=k,
             collection_name=collection_name,
+            extra_collections=self.extra_collections,
         )
         self.prompt = get_rag_prompt()
         self.llm = _build_llm(settings, model, base_url)

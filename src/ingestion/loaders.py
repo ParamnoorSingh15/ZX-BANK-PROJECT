@@ -32,6 +32,7 @@ from typing import Iterator, List
 from langchain_core.documents import Document
 
 import pypdf
+import pdfplumber
 from bs4 import BeautifulSoup
 import docx2txt
 from pptx import Presentation
@@ -57,6 +58,13 @@ def load_pdf(file_path: str) -> List[Document]:
     page of the source document. If normal extraction returns nothing for a
     page (common with table-heavy PDFs), we retry in layout mode so tabular
     text is not silently lost.
+
+    Table extraction:
+        Bank statements and other PDFs often store data in grids. We use
+        ``pdfplumber`` to detect tables on each page and render them as
+        pipe-separated rows so cells stay associated with their row instead of
+        becoming a loose column of words. This makes rate tables, transaction
+        lists and eligibility grids searchable.
     """
     documents: List[Document] = []
     with open(file_path, "rb") as fh:
@@ -71,9 +79,42 @@ def load_pdf(file_path: str) -> List[Document]:
                     text = page.extract_text(extraction_mode="layout") or ""
                 except Exception:
                     text = ""
+
+            # Extract tables with pdfplumber for structured grid data.
+            table_texts: List[str] = []
+            try:
+                with pdfplumber.open(file_path) as pdf:
+                    if index < len(pdf.pages):
+                        plumber_page = pdf.pages[index]
+                        tables = plumber_page.extract_tables()
+                        for table in tables:
+                            rows: List[str] = []
+                            for row in table:
+                                cells = [
+                                    (cell or "").strip().replace("\n", " ")
+                                    for cell in row
+                                ]
+                                cells = [cell for cell in cells if cell]
+                                if cells:
+                                    rows.append(" | ".join(cells))
+                            if rows:
+                                table_texts.append("\n".join(rows))
+            except Exception:
+                # pdfplumber failure must not abort page extraction.
+                pass
+
+            # Combine normal text with extracted tables.
+            combined_parts: List[str] = []
+            if text.strip():
+                combined_parts.append(text)
+            if table_texts:
+                combined_parts.append("\n--- Tables ---\n" + "\n\n".join(table_texts))
+
+            combined = "\n".join(combined_parts)
+
             documents.append(
                 Document(
-                    page_content=text,
+                    page_content=combined,
                     metadata=_base_metadata(file_path, page=index + 1),
                 )
             )
