@@ -254,7 +254,7 @@ export default function App() {
         </header>
 
         <section className="chat-area" aria-live="polite">
-          {messages.length === 0 && !loading && (
+          {messages.length === 0 && !askLoading && !uploading && (
             <div className="empty-state">
               <div className="empty-icon">🏦</div>
               <span className="empty-kicker">ZX Bank · Retrieval-Augmented Generation</span>
