@@ -1,0 +1,113 @@
+version: "3.8"
+
+services:
+  ###############################################################################
+  # QDRANT - Vector Database
+  ###############################################################################
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: zx-bank-qdrant
+    restart: unless-stopped
+    networks:
+      - knowledge-assistant-network
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "test -d /proc/1 && exit 0 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  ###############################################################################
+  # OLLAMA - LLM and Embedding Server
+  ###############################################################################
+  ollama:
+    image: ollama/ollama:latest
+    container_name: zx-bank-ollama
+    restart: unless-stopped
+    networks:
+      - knowledge-assistant-network
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ps aux | grep -q '[o]llama serve' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  ###############################################################################
+  # BACKEND - FastAPI RAG Server
+  ###############################################################################
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: zx-bank-backend
+    restart: unless-stopped
+    networks:
+      - knowledge-assistant-network
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - QDRANT_URL=http://qdrant:6333
+      - OLLAMA_BASE_URL=http://ollama:11434
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  ###############################################################################
+  # FRONTEND - React + Vite served by Nginx
+  ###############################################################################
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    container_name: zx-bank-frontend
+    restart: unless-stopped
+    networks:
+      - knowledge-assistant-network
+    ports:
+      - "8080:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  knowledge-assistant-network:
+    driver: bridge
+
+volumes:
+  qdrant_data:
+  ollama_data:

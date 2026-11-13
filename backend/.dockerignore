@@ -1,0 +1,36 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environment
+.env
+.env.local
+
+# OS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+
+# Logs
+*.log
+ingestion.log
+
+# Data
+qdrant_storage/
+dataset/ZX Bank/
+
+# Build artifacts
+backend/dist/
+backend/build/
+*.egg-info/
+
+# Git
+.git/
