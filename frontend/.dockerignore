@@ -1,0 +1,26 @@
+# Node.js
+node_modules/
+*.log
+npm-debug.log*
+
+# Build output
+dist/
+build/
+
+# Build output
+dist/
+build/
+
+# OS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+
+# Environment
+.env
+.env.local
+
+# Git
+.git/

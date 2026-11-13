@@ -1,0 +1,34 @@
+# Version control
+.git/
+.gitignore
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.coverage
+
+# Environment
+.env
+
+# OS
+.DS_Store
+
+# Data (large, not needed for build)
+dataset/
+qdrant_storage/
+
+# Frontend build artifacts
+frontend/node_modules/
+frontend/dist/
+
+# Logs
+*.log
+ingestion.log
+
+# IDE
+.idea/
+.vscode/
