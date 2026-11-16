@@ -1,674 +1,464 @@
-﻿# ZX Bank RAG Application
+# ZX Bank – AI Knowledge Assistant
 
-End-to-end Retrieval-Augmented Generation (RAG) application for ZX Bank using
-**LangChain**, **Ollama** (Qwen3 4B LLM + Qwen3-Embedding 4B), **Qdrant**
-(vector database), **FastAPI** (backend), and **React** (frontend).
+An end-to-end Retrieval-Augmented Generation (RAG) application that enables users to query ZX Bank's knowledge base using natural language.
 
-Answers are generated **only** from ZX Bank documents, include source
-citations (document, section, page/slide), and are rendered with proper
-Markdown tables and lists in the chat UI.
+The application combines document ingestion, hybrid retrieval, local LLM inference, and source-grounded answer generation to provide accurate responses with document-level citations.
 
----
+## Key Features
 
-## Tech Stack
+- **Multi-format document ingestion:** Supports PDF, DOCX, PPTX, HTML, and Markdown.
+- **Retrieval-Augmented Generation:** Generates responses using relevant retrieved documents.
+- **Hybrid search:** Combines dense vector search and BM25 keyword retrieval.
+- **Source citations:** Provides document, section, page, and slide references where available.
+- **Local LLM inference:** Uses Ollama for locally hosted language models and embeddings.
+- **Conversation management:** Supports session-based conversations.
+- **Document uploads:** Allows users to upload and index additional documents.
+- **Evaluation:** Includes retrieval and generation evaluation metrics.
+- **Containerization:** Docker and Docker Compose support.
+- **Observability:** Integrated Prometheus, Grafana, Loki, and Grafana Alloy.
+- **Kubernetes deployment:** Includes Kubernetes deployment and storage manifests.
 
-| Layer | Technology |
-|-------|------------|
-| Language | Python 3.13+ |
+## Architecture
+
+```text
+                  User
+                   |
+                   v
+             React Frontend
+                   |
+                   v
+              FastAPI Backend
+                   |
+          +--------+--------+
+          |                 |
+          v                 v
+     LangChain           Ollama
+          |            (LLM + Embeddings)
+          |
+          v
+     Hybrid Retrieval
+          |
+          v
+        Qdrant
+      Vector Database
+          |
+          v
+    Retrieved Context
+          |
+          v
+    Answer Generation
+          |
+          v
+    Response + Sources
+```
+
+## Technology Stack
+
+| Component | Technology |
+|---|---|
+| Language | Python |
 | LLM Framework | LangChain |
-| LLM | Ollama - `qwen3:4b` (reasoning enabled) |
-| Embeddings | Ollama - `qwen3-embedding:4b` (2560 dimensions) |
-| Vector DB | Qdrant |
-| Retrieval | Hybrid: dense cosine + BM25 keyword, deduplicated, neighbour-expanded |
-| Backend | FastAPI + Uvicorn |
-| Frontend | React + Vite + react-markdown |
-| Evaluation | RAGAS + custom metrics (Recall@K, Precision@K, MRR, nDCG, faithfulness, answer relevancy, correctness) |
-| Container | Docker (Qdrant), Docker Compose |
-| Monitoring | Prometheus, Grafana, Loki, Alloy |
-| Orchestration | Kubernetes (k8s/ manifests) |
-| GPU Support | NVIDIA GPU passthrough for Ollama |
-
----
+| LLM | Ollama – Qwen3 4B |
+| Embedding Model | Qwen3-Embedding 4B |
+| Vector Database | Qdrant |
+| Retrieval | Hybrid Search (Dense + BM25) |
+| Backend | FastAPI, Uvicorn |
+| Frontend | React, Vite |
+| Evaluation | RAGAS, Custom Metrics |
+| Containerization | Docker, Docker Compose |
+| Monitoring | Prometheus, Grafana |
+| Logging | Loki, Grafana Alloy |
+| Orchestration | Kubernetes |
 
 ## Project Structure
 
+```text
+ZX-BANK-PROJECT/
+│
+├── src/
+│   ├── config/          # Application configuration
+│   ├── ingestion/       # Document loading and processing
+│   ├── embeddings/      # Embedding generation
+│   ├── vectorstore/     # Qdrant integration
+│   ├── retrieval/       # Hybrid retrieval strategies
+│   ├── prompts/         # RAG prompts
+│   ├── chains/          # LangChain RAG pipelines
+│   ├── evaluation/      # RAG evaluation
+│   └── api/             # FastAPI application
+│
+├── frontend/            # React application
+├── scripts/             # Ingestion scripts
+├── tests/                # Automated tests
+├── data/benchmark/      # Evaluation dataset
+├── monitoring/          # Monitoring and logging configuration
+├── k8s/                  # Kubernetes manifests
+│
+├── dataset/              # Source documents (not committed)
+├── .env.example          # Environment template
+├── requirements.txt
+├── docker-compose.yml
+└── README.md
 ```
-zx-bank-rag/
-  dataset/                 # Existing ZX Bank dataset (preserved, not committed)
-    pdf/ html/ docx/ pptx/ md/
-  data/benchmark/          # Benchmark questions for evaluation
-  src/
-    config/                # Environment-driven settings
-    ingestion/             # Loaders (tables included), cleaning, splitting
-    embeddings/            # Ollama embedding client + dimension probing
-    vectorstore/           # Qdrant integration, indexing, reset, dedup
-    retrieval/             # Hybrid, dense, MMR, filtered retrievers
-    prompts/               # Detailed-answer RAG prompt
-    chains/                # LCEL RAG chains + Qwen3 reasoning settings
-    evaluation/            # Retrieval + generation metrics
-    api/                   # FastAPI backend
-  frontend/                # React chat interface (Markdown rendering)
-  scripts/ingest.py        # Ingestion CLI (supports --reset)
-  tests/                   # Pytest unit + integration tests
-  requirements.txt
-  .env.example             # Copy to .env and configure
-  LEARNING_NOTES.md        # LangChain concept explanations
-  README.md
-  docker-compose.yml       # Docker Compose (4 services)
-  monitoring/              # Observability stack (Prometheus, Grafana, Loki, Alloy)
-    docker-compose.yml     # Monitoring Compose file
-    prometheus/            # Prometheus config
-    grafana/               # Grafana dashboards & datasources
-    loki/                  # Loki log aggregation
-    alloy/                 # Grafana Alloy telemetry pipeline
-  k8s/                     # Kubernetes deployment manifests
-    backend.yaml
-    frontend.yaml
-    ollama.yaml
-    qdrant.yaml
-    storage.yaml
-  qdrant-backup/           # Qdrant backup data
-  qdrant-data.tar          # Qdrant data archive
-```
-
----
-
-## What Was Fixed for Answer Accuracy
-
-| Problem | Fix |
-|---------|-----|
-| PowerPoint tables (FD rates, branch lists) were silently dropped | PPTX loader now extracts text frames, nested group shapes, tables, charts and speaker notes |
-| HTML tables lost row structure | Tables are converted to pipe-separated rows before text extraction |
-| 400-character chunks split headings from their tables | Default chunk size is now 1600 chars with 200 overlap |
-| 9% of chunks were title-only fragments | Chunks under 200 chars are merged into a neighbour |
-| Duplicate copies from 5 file formats filled the top results | Retrieved chunks are near-deduplicated and capped per document |
-| Dense search missed exact terms such as `3.50%`, `IFSC`, branch names | Hybrid retrieval combines cosine similarity with BM25 keyword scoring |
-| A hit could be only half of a section | Each top hit is expanded with its neighbouring chunks |
-| Qwen3 returned empty answers when reasoning used the whole output budget | `num_ctx=16384`, `num_predict=3072` and an automatic retry |
-| Raw `**`, `|` and `#` appeared in the chat | Answers are rendered as Markdown with GFM tables |
-
----
 
 ## Prerequisites
 
-- **Python 3.13+** with a virtual environment
-- **Ollama** running at `http://localhost:11434` with:
-  ```bash
-  ollama pull qwen3:4b
-  ollama pull qwen3-embedding:4b
-  ```
-- **Docker Desktop** for Qdrant
+Ensure the following tools are installed:
 
----
+- Python 3.13+
+- Node.js and npm
+- Docker and Docker Compose
+- Ollama
+- Git
 
-## Step-by-Step Setup
+## Getting Started
 
-### 1. Clone the repository
+### 1. Clone the Repository
 
 ```bash
 git clone https://github.com/ParamnoorSingh15/ZX-BANK-PROJECT.git
-cd "ZX Bank Project"
+
+cd ZX-BANK-PROJECT
 ```
 
-### 2. Configure environment
+### 2. Configure Environment Variables
+
+Create your environment file:
 
 ```bash
 cp .env.example .env
 ```
 
-The important settings:
+Configure the required variables:
 
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `LLM_MODEL` | `qwen3:4b` | Generation model |
-| `EMBEDDING_MODEL` | `qwen3-embedding:4b` | Embedding model |
-| `LLM_REASONING` | `true` | Keep Qwen3 thinking enabled |
-| `LLM_NUM_CTX` | `16384` | Context window |
-| `LLM_NUM_PREDICT` | `3072` | Output budget (reasoning + answer) |
-| `CHUNK_SIZE` | `1600` | Characters per chunk |
-| `CHUNK_OVERLAP` | `200` | Overlap between chunks |
-| `RETRIEVAL_STRATEGY` | `hybrid` | `hybrid`, `dense`, `mmr` or `filtered` |
-| `RETRIEVAL_K` | `8` | Chunks after deduplication |
-| `RETRIEVAL_FETCH_K` | `40` | Candidates fetched before re-ranking |
-| `RETRIEVAL_KEYWORD_WEIGHT` | `0.35` | BM25 weight in the hybrid score |
+| Variable | Description |
+|---|---|
+| `LLM_MODEL` | Language model |
+| `EMBEDDING_MODEL` | Embedding model |
+| `OLLAMA_BASE_URL` | Ollama service URL |
+| `QDRANT_URL` | Qdrant service URL |
+| `QDRANT_COLLECTION` | Vector collection name |
+| `CHUNK_SIZE` | Document chunk size |
+| `CHUNK_OVERLAP` | Chunk overlap |
+| `RETRIEVAL_STRATEGY` | Retrieval strategy |
+| `RETRIEVAL_K` | Number of retrieved chunks |
 
-### 3. Install Python dependencies
+Refer to `.env.example` for the complete configuration.
+
+**Note:** When running inside Docker Compose, use service names such as `http://ollama:11434` and `http://qdrant:6333`. When running directly on the host, use the appropriate localhost URLs.
+
+### 3. Install Python Dependencies
 
 ```bash
 python -m venv .venv
-.venv\Scripts\activate          # Windows
-# or
-source .venv/bin/activate       # Mac/Linux
-
-python -m pip install -r requirements.txt
 ```
 
-### 4. Start Qdrant with persistent storage
+Activate the environment:
+
+**Windows**
+
+```powershell
+.venv\Scripts\activate
+```
+
+**Linux / macOS**
 
 ```bash
-mkdir qdrant_storage
-docker run -d --name qdrant -p 6333:6333 -v ${PWD}/qdrant_storage:/qdrant/storage qdrant/qdrant
+source .venv/bin/activate
 ```
 
-Verify:
+Install dependencies:
 
 ```bash
-curl http://localhost:6333/collections
+pip install -r requirements.txt
 ```
 
-> The named volume keeps your vectors across container restarts. On later
-> sessions use `docker start qdrant` instead of re-running the command.
-
-### 5. Pull Ollama models
+### 4. Start Ollama Models
 
 ```bash
 ollama pull qwen3:4b
 ollama pull qwen3-embedding:4b
 ```
 
-### 6. Ingest documents into Qdrant
+Ensure Ollama is running before proceeding.
 
-First run, or **any time you change chunking / loaders / embedding model**:
+### 5. Start Qdrant
 
-```powershell
-$env:PYTHONPATH="C:\Users\Param\Desktop\ZX Bank Project"; python scripts/ingest.py --reset
-```
-
-Mac/Linux:
+For local development:
 
 ```bash
-PYTHONPATH="." python scripts/ingest.py --reset
+docker run -d \
+  --name qdrant \
+  -p 6333:6333 \
+  -v qdrant_storage:/qdrant/storage \
+  qdrant/qdrant
 ```
 
-What the script reports:
+Verify the service:
 
-- chunks loaded and split
-- chunks by format (`pdf`, `html`, `docx`, `pptx`, `md`)
-- total characters
-- number of chunks under 120 characters (should be very small)
-- indexed progress every 100 chunks
-
-**All five formats are indexed** so no content is lost. Duplicate copies are
-removed at search time, not during ingestion.
-
-### 7. Start the FastAPI backend
-
-Terminal 1:
-
-```powershell
-$env:PYTHONPATH="C:\Users\Param\Desktop\ZX Bank Project"; python -m uvicorn src.api.server:app --reload --port 8000
+```bash
+curl http://localhost:6333/collections
 ```
 
-Verify: <http://localhost:8000/health> should return `"status":"ok"`.
+### 6. Ingest Documents
 
-API docs: <http://localhost:8000/docs>
+Index the ZX Bank knowledge base:
 
-### 8. Start the React frontend
+```bash
+PYTHONPATH=. python scripts/ingest.py --reset
+```
 
-Terminal 2:
+The ingestion pipeline performs:
+
+1. Document loading.
+2. Text extraction and preprocessing.
+3. Text chunking.
+4. Embedding generation.
+5. Vector indexing in Qdrant.
+
+The `--reset` option rebuilds the configured collection.
+
+### 7. Start the Backend
+
+```bash
+python -m uvicorn src.api.server:app --reload --port 8000
+```
+
+Backend endpoints:
+
+- API: http://localhost:8000
+- Swagger documentation: http://localhost:8000/docs
+- Health check: http://localhost:8000/health
+
+### 8. Start the Frontend
+
+Open another terminal:
 
 ```bash
 cd frontend
-npm install          # first time only
+
+npm install
+
 npm run dev
 ```
 
-Open <http://localhost:5173> and ask a question.
+Access the application:
 
-> Answers take roughly 20–60 seconds because Qwen3 first reasons about the
-> retrieved context. The UI shows a live “thinking” timer.
+http://localhost:5173
 
----
-
-## Daily Workflow (after first setup)
-
-You do **not** need to re-ingest every time. The vectors persist in
-`qdrant_storage`.
-
-| Step | Command |
-|------|---------|
-| Start Qdrant | `docker start qdrant` |
-| Start backend | `python -m uvicorn src.api.server:app --reload --port 8000` |
-| Start frontend | `cd frontend && npm run dev` |
-
-Re-ingest with `--reset` only when:
-
-- you add or change documents in the dataset,
-- you change `CHUNK_SIZE` / `CHUNK_OVERLAP`,
-- you change the embedding model,
-- you delete `qdrant_storage`.
-
----
-
-## API Endpoints
+## API Reference
 
 | Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/` | GET | API info |
-| `/health` | GET | Qdrant and collection status |
-| `/collections` | GET | List Qdrant collections |
-| `/ask` | POST | Question → detailed answer + sources |
+|---|---|---|
+| `/` | GET | API information |
+| `/health` | GET | Application and collection health |
+| `/collections` | GET | List vector collections |
+| `/ask` | POST | Submit a question |
 | `/documents/upload` | POST | Upload and index a document |
-| `/conversations/{session_id}` | DELETE | Clear chat history |
+| `/conversations/{session_id}` | DELETE | Clear conversation history |
 
-Example request:
+Interactive API documentation is available at:
+
+`http://localhost:8000/docs`
+
+## Docker Deployment
+
+The application supports containerized deployment using Docker Compose.
+
+### Start Services
 
 ```bash
-curl -X POST http://localhost:8000/ask \
-  -H "Content-Type: application/json" \
-  -d '{"question": "What are the interest rates on fixed deposits?", "strategy": "hybrid", "k": 8}'
+docker compose config
+
+docker compose build
+
+docker compose up -d
 ```
 
-Response shape:
+Check service status:
 
-```json
-{
-  "answer": "ZX Bank offers the following sample fixed deposit rates ...",
-  "sources": [
-    {
-      "title": "ZX Bank Fixed Deposits",
-      "format": "md",
-      "section": "Sample Interest Rates",
-      "page": null,
-      "slide": null,
-      "content_preview": "..."
-    }
-  ],
-  "strategy": "hybrid",
-  "k": 8,
-  "session_id": null
-}
+```bash
+docker compose ps
 ```
 
----
+View application logs:
 
-## Running Tests
+```bash
+docker compose logs -f backend
+```
+
+### Initialize Ollama Models
+
+```bash
+docker compose exec ollama ollama pull qwen3:4b
+
+docker compose exec ollama ollama pull qwen3-embedding:4b
+```
+
+### Application Services
+
+| Service | URL |
+|---|---|
+| Frontend | http://localhost:8080 |
+| Backend | http://localhost:8000 |
+| API Documentation | http://localhost:8000/docs |
+| Qdrant | http://localhost:6333 |
+| Ollama | http://localhost:11434 |
+
+Docker named volumes provide persistent storage for application data and downloaded models.
+
+To stop services:
+
+```bash
+docker compose down
+```
+
+Avoid `docker compose down -v` unless you intend to delete persistent volumes.
+
+## Monitoring and Observability
+
+The project includes an observability stack for monitoring application performance and collecting service logs.
+
+| Component | Purpose |
+|---|---|
+| Prometheus | Metrics collection |
+| Grafana | Monitoring dashboards |
+| Loki | Centralized log aggregation |
+| Grafana Alloy | Telemetry collection and forwarding |
+
+Start the monitoring stack:
+
+```bash
+cd monitoring
+
+docker compose up -d
+```
+
+Access Grafana:
+
+http://localhost:3000
+
+Configure credentials through environment variables rather than committing them to the repository.
+
+## Kubernetes Deployment
+
+Kubernetes manifests are available in the `k8s/` directory.
+
+Available manifests:
+
+| Manifest | Responsibility |
+|---|---|
+| `storage.yaml` | Persistent storage |
+| `qdrant.yaml` | Vector database |
+| `ollama.yaml` | LLM inference service |
+| `backend.yaml` | FastAPI backend |
+| `frontend.yaml` | React frontend |
+
+Apply the manifests:
+
+```bash
+kubectl apply -f k8s/storage.yaml
+
+kubectl apply -f k8s/qdrant.yaml
+
+kubectl apply -f k8s/ollama.yaml
+
+kubectl apply -f k8s/backend.yaml
+
+kubectl apply -f k8s/frontend.yaml
+```
+
+Verify deployment:
+
+```bash
+kubectl get pods
+
+kubectl get services
+```
+
+## Testing
+
+Run the automated test suite:
 
 ```bash
 python -m pytest tests/ -v
 ```
 
----
+## RAG Evaluation
 
-## Evaluation
+The project includes retrieval and generation evaluation.
+
+Metrics include:
+
+- Recall@K
+- Precision@K
+- Mean Reciprocal Rank (MRR)
+- Normalized Discounted Cumulative Gain (nDCG)
+- Faithfulness
+- Answer Relevancy
+- Answer Correctness
+
+Run evaluation:
 
 ```bash
 python -c "
 from src.evaluation import run_evaluation, EvalConfig
+
 report = run_evaluation(EvalConfig(k=8))
+
 print(report.retrieval)
 print(report.generation)
 "
 ```
 
----
-
 ## Troubleshooting
 
-**Qdrant status is red / “Backend unreachable”**
-- Start Qdrant: `docker start qdrant`
-- Start FastAPI on port 8000.
-- The frontend proxies `/api/*` to `http://localhost:8000` and strips `/api`
-  (see `frontend/vite.config.js`).
+**Qdrant connection failure**
 
-**Port 6333 already allocated**
-- A Qdrant container already exists. Use `docker ps` and `docker start <name>`
-  rather than starting a second container.
-
-**Answers are empty**
-- Qwen3 reasoning consumed the output budget. Keep `LLM_NUM_CTX=16384` and
-  `LLM_NUM_PREDICT=3072`; the chain also retries automatically.
-- Do **not** set `LLM_REASONING=false` on this Ollama build: the raw
-  chain-of-thought leaks into the answer text.
-
-**Answer says the data is missing**
-- Confirm ingestion finished and `/health` shows the expected chunk count.
-- Re-run with `--reset` after changing loaders or chunk sizes.
-- Check that the question is about ZX Bank; the model refuses out-of-scope
-  questions by design.
-
-**Port 8000 in use**
-```powershell
-Get-NetTCPConnection -LocalPort 8000 | Select-Object OwningProcess
-Stop-Process -Id <pid>
+```bash
+docker ps
+curl http://localhost:6333/collections
 ```
+
+**Ollama model unavailable**
+
+```bash
+ollama list
+ollama serve
+```
+
+**Backend health check failure**
+
+```bash
+curl http://localhost:8000/health
+```
+
+**Container logs**
+
+```bash
+docker compose logs -f
+```
+
+**Frontend dependency issues**
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+## Security and Configuration
+
+- Keep `.env` files and credentials out of version control.
+- Use `.env.example` for documenting required environment variables.
+- Do not commit datasets, generated secrets, or local environment directories.
+- Restrict access to internal services and management endpoints.
+- Configure authentication and authorization before exposing the application publicly.
+
+## License
+
+Add the appropriate license information before distributing this project.
 
 ---
 
-## Docker Deployment
-
-The application is fully containerized with Docker Compose. Four services run
-on a dedicated network: **frontend**, **backend**, **qdrant**, and **ollama**.
-
-### Prerequisites
-
-- **Docker Desktop** (includes Docker Compose)
-- **~8 GB RAM** (Qwen3 models are ~2.5 GB each)
-- **NVIDIA GPU** (optional, for faster inference via NVIDIA Container Toolkit)
-- **Git** for cloning the repository
-
-### Required Environment Variables
-
-Copy `.env.example` to `.env` and adjust as needed:
-
-```bash
-cp .env.example .env
-```
-
-Key variables (see `.env.example` for all options):
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `OLLAMA_BASE_URL` | `http://ollama:11434` | Ollama service URL (Docker service name) |
-| `LLM_MODEL` | `qwen3:4b` | Generation model |
-| `EMBEDDING_MODEL` | `qwen3-embedding:4b` | Embedding model |
-| `QDRANT_URL` | `http://qdrant:6333` | Qdrant service URL (Docker service name) |
-| `QDRANT_COLLECTION` | `zx_bank_knowledge` | Vector collection name |
-| `CHUNK_SIZE` | `1600` | Characters per chunk |
-| `RETRIEVAL_K` | `8` | Chunks after deduplication |
-
-### Docker Architecture
-
-```
-Browser
-   |
-   v
-Frontend (Nginx:8080, React)
-   | proxies /api to backend
-   v
-Backend (FastAPI:8000, Python)
-   | connects via Docker service names
-   +----------------------------+
-   |                            |
-   v                            v
-Qdrant (Vector DB:6333)    Ollama (LLM + Embeddings:11434)
-
-All services run on dedicated network: knowledge-assistant-network
-```
-
-- **Frontend**: React + Vite build served by Nginx, proxies `/api` → backend
-- **Backend**: FastAPI + Uvicorn, connects to Qdrant and Ollama via service names
-- **Qdrant**: Vector database with persistent `qdrant_data` volume
-- **Ollama**: LLM server with persistent `ollama_data` volume (models persist)
-
-### Build Commands
-
-```bash
-# Validate configuration
-docker compose config
-
-# Build all images
-docker compose build
-```
-
-### Startup Commands
-
-```bash
-# Start all services
-docker compose up -d
-
-# Check service status
-docker compose ps
-
-# View logs
-docker compose logs -f backend
-docker compose logs -f frontend
-docker compose logs -f qdrant
-docker compose logs -f ollama
-```
-
-### Ollama Model Installation
-
-Models are **not** downloaded automatically on startup. After starting the
-containers, pull the required models:
-
-```bash
-docker compose exec ollama ollama pull qwen3:4b
-docker compose exec ollama ollama pull qwen3-embedding:4b
-
-# Verify
-docker compose exec ollama ollama list
-```
-
-Models persist in the `ollama_data` named volume across container restarts.
-
-### Application Access URLs
-
-| Service | URL |
-|---------|-----|
-| Frontend UI | http://localhost:8080 |
-| Backend API | http://localhost:8000 |
-| API Docs | http://localhost:8000/docs |
-| Qdrant | http://localhost:6333 |
-| Ollama API | http://localhost:11434 |
-| Grafana | http://localhost:3000 |
-| Prometheus | http://localhost:9090 |
-| Loki | http://localhost:3100 |
-| Alloy | http://localhost:12345 |
-
-### Container Management
-
-```bash
-# Restart all services
-docker compose restart
-
-# Restart a specific service
-docker compose restart backend
-
-# Stop all services (preserves data)
-docker compose stop
-
-# Stop and remove containers (preserves named volumes)
-docker compose down
-
-# Stop and remove everything INCLUDING named volumes (DELETES DATA)
-docker compose down -v
-```
-
-### Logs and Troubleshooting
-
-```bash
-# View all logs
-docker compose logs
-
-# View specific service logs
-docker compose logs -f backend
-docker compose logs -f frontend
-docker compose logs -f qdrant
-docker compose logs -f ollama
-```
-
-### Persistent Volumes
-
-| Volume | Purpose | Survives `docker compose down`? | Survives `docker compose down -v`? |
-|--------|---------|---------------------------------|------------------------------------|
-| `qdrant_data` | Qdrant vectors and collections | Yes | **No** (deleted) |
-| `ollama_data` | Ollama models and blobs | Yes | **No** (deleted) |
-| `grafana_data` | Grafana dashboards & settings | Yes | **No** (deleted) |
-| `prometheus_data` | Prometheus metrics TSDB | Yes | **No** (deleted) |
-| `loki_data` | Loki log chunks | Yes | **No** (deleted) |
-
-**Warning:** `docker compose down -v` removes named volumes and will delete
-all Qdrant vectors and Ollama models. Use `docker compose down` (without `-v`)
-for normal shutdowns to preserve data.
-
-### PDF Upload Behavior
-
-Uploaded PDFs are processed temporarily and **deleted after indexing**. The
-extracted text chunks are stored in Qdrant (persistent in `qdrant_data`).
-Uploaded documents are indexed into session-scoped collections
-(`zx_bank_uploads_<session_id>`) and are deleted when the conversation is
-cleared. No persistent upload directory is used.
-
-### Shutdown Instructions
-
-```bash
-# Normal shutdown (preserves all data)
-docker compose down
-
-# Complete cleanup (DELETES all vectors and models)
-docker compose down -v
-```
-
----
-
-## Git Rules
-
-- Do **not** commit `dataset/`, `.env`, `.venv/`, `qdrant_storage/`,
-  `frontend/node_modules`, or generated secrets.
-- `.gitignore` already excludes these paths.
-
----
-
-## Learning Notes
-
-See `LEARNING_NOTES.md` for explanations of LangChain concepts: Document
-objects, loaders, table extraction, text splitters, context headers,
-embeddings, vector stores, hybrid retrieval, BM25, deduplication, neighbour
-expansion, ChatPromptTemplate, MessagesPlaceholder, LCEL, Qwen3 reasoning
-budgets, and evaluation metrics.
-
----
-
-## Monitoring Stack (Observability)
-
-The application includes a full observability stack under `monitoring/`:
-
-| Service | Port | Purpose |
-|---------|------|---------|
-| Prometheus | 9090 | Metrics collection & storage |
-| Grafana | 3000 | Dashboards & visualization |
-| Loki | 3100 | Log aggregation |
-| Alloy | 12345 | Telemetry pipeline (Grafana Alloy) |
-
-### Start Monitoring
-
-```bash
-cd monitoring
-docker compose up -d
-```
-
-### Access URLs
-
-| Service | URL | Default Credentials |
-|---------|-----|---------------------|
-| Grafana | http://localhost:3000 | admin / zxbank_monitoring_2026 |
-| Prometheus | http://localhost:9090 | — |
-| Loki | http://localhost:3100 | — |
-| Alloy | http://localhost:12345 | — |
-
-Grafana is pre-configured with Prometheus and Loki datasources.
-
----
-
-## Kubernetes Deployment
-
-Kubernetes manifests are under `k8s/`:
-
-| File | Purpose |
-|------|---------|
-| `backend.yaml` | FastAPI backend Deployment + Service |
-| `frontend.yaml` | React frontend Deployment + Service |
-| `ollama.yaml` | Ollama LLM Deployment + Service (GPU-enabled) |
-| `qdrant.yaml` | Qdrant vector DB Deployment + Service |
-| `storage.yaml` | PersistentVolumeClaims for Qdrant & Ollama |
-
-### Deploy to Kubernetes
-
-```bash
-kubectl apply -f k8s/storage.yaml
-kubectl apply -f k8s/qdrant.yaml
-kubectl apply -f k8s/ollama.yaml
-kubectl apply -f k8s/backend.yaml
-kubectl apply -f k8s/frontend.yaml
-```
-
-### Check Status
-
-```bash
-kubectl get pods
-kubectl get services
-```
-
----
-
-## GPU Support (NVIDIA)
-
-Ollama can use NVIDIA GPUs for faster inference. GPU passthrough is configured
-in `docker-compose.yml`:
-
-```yaml
-deploy:
-  resources:
-    reservations:
-      devices:
-        - driver: nvidia
-          count: all
-          capabilities: [gpu]
-```
-
-### Prerequisites
-
-- **NVIDIA Container Toolkit** installed on the host
-- **NVIDIA drivers** loaded
-
-### Verify GPU Access
-
-```bash
-docker compose exec ollama nvidia-smi
-```
-
----
-
-## Chunking & Ingestion Tuning
-
-Chunk embedding and upsert batch sizes were reduced for better Ollama
-responsiveness on consumer GPUs:
-
-| Setting | Value | Purpose |
-|---------|-------|---------|
-| `EMBED_BATCH` | 4 | Chunks embedded per batch |
-| `UPSERT_BATCH` | 4 | Points upserted per batch |
-
-Smaller batches prevent Ollama from being overwhelmed during large ingestion
-runs, at the cost of slightly longer total ingestion time.
-
-### Re-index All Documents
-
-```powershell
-$env:PYTHONPATH="C:\Users\Param\Desktop\ZX Bank Project"
-$env:PYTHONIOENCODING="utf-8"
-.venv\Scripts\python.exe scripts/ingest.py --reset
-```
-
-This loads all 69 documents (~1,420 chunks) across 5 formats into Qdrant.
-
----
-
-## Qdrant Backup & Restore
-
-Qdrant data is persisted in the `qdrant_data` named volume. A backup archive
-is provided at `qdrant-data.tar` and backup data under `qdrant-backup/`.
-
-### Backup Qdrant Data
-
-```bash
-# Stop services first
-docker compose down
-
-# Backup the volume
-docker run --rm -v zxbankproject_qdrant_data:/data -v $(pwd):/backup alpine tar czf /backup/qdrant-data.tar -C /data .
-```
-
-### Restore Qdrant Data
-
-```bash
-# Stop services
-docker compose down
-
-# Restore from archive
-docker run --rm -v zxbankproject_qdrant_data:/data -v $(pwd):/backup alpine sh -c "rm -rf /data/* && tar xzf /backup/qdrant-data.tar -C /data"
-
-# Restart
-docker compose up -d
-```
+**ZX Bank AI Knowledge Assistant**  
+Built with LangChain, Ollama, Qdrant, FastAPI, React, Docker, and Kubernetes.
