@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: zx-bank
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+        - name: backend
+          image: zx-bank-backend:k8s-running
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8000
+          env:
+            - name: OLLAMA_BASE_URL
+              value: "http://ollama:11434"
+            - name: QDRANT_URL
+              value: "http://qdrant:6333"
+            - name: QDRANT_COLLECTION
+              value: "zx_bank_knowledge"
+            - name: LLM_MODEL
+              value: "qwen3:4b"
+            - name: EMBEDDING_MODEL
+              value: "qwen3-embedding:4b"
+            - name: DATASET_PATH
+              value: "dataset/ZX Bank"
+            - name: RETRIEVAL_STRATEGY
+              value: "hybrid"
+            - name: RETRIEVAL_K
+              value: "8"
+            - name: RETRIEVAL_FETCH_K
+              value: "40"
+            - name: CHUNK_SIZE
+              value: "1600"
+            - name: CHUNK_OVERLAP
+              value: "200"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  namespace: zx-bank
+spec:
+  selector:
+    app: backend
+  ports:
+    - port: 8000
+      targetPort: 8000
+  type: ClusterIP

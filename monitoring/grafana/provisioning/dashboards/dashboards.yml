@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: ZX Bank
+    orgId: 1
+    folder: ZX Bank
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards

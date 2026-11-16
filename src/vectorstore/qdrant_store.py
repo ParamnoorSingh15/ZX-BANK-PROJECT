@@ -172,8 +172,8 @@ def add_chunks(
 
     # Batch-embed chunks (smaller batches so Ollama stays responsive) and
     # upsert incrementally. Deterministic IDs make re-runs resume safely.
-    EMBED_BATCH = 64
-    UPSERT_BATCH = 100
+    EMBED_BATCH = 4
+    UPSERT_BATCH = 4
     added = 0
     points: List[PointStruct] = []
 
