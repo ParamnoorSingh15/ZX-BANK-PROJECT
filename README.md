@@ -1,62 +1,65 @@
 # ZX Bank – AI Knowledge Assistant
 
-An end-to-end Retrieval-Augmented Generation (RAG) application that enables users to query ZX Bank's knowledge base using natural language.
+An end-to-end Retrieval-Augmented Generation (RAG) application that enables users to interact with ZX Bank's knowledge base through natural language queries.
 
-The application combines document ingestion, hybrid retrieval, local LLM inference, and source-grounded answer generation to provide accurate responses with document-level citations.
+Built using LangChain, Ollama, Qdrant, FastAPI, and React, the application supports multi-format document ingestion, dynamic PDF uploads, hybrid retrieval, and source-grounded answer generation.
 
 ## Key Features
 
-- **Multi-format document ingestion:** Supports PDF, DOCX, PPTX, HTML, and Markdown.
-- **Retrieval-Augmented Generation:** Generates responses using relevant retrieved documents.
-- **Hybrid search:** Combines dense vector search and BM25 keyword retrieval.
-- **Source citations:** Provides document, section, page, and slide references where available.
-- **Local LLM inference:** Uses Ollama for locally hosted language models and embeddings.
-- **Conversation management:** Supports session-based conversations.
-- **Document uploads:** Allows users to upload and index additional documents.
+- **Multi-format Document Ingestion:** Supports PDF, DOCX, PPTX, HTML, and Markdown documents.
+- **Dynamic PDF Upload:** Upload PDF documents through the application and query their contents.
+- **Retrieval-Augmented Generation:** Generates context-aware responses using relevant retrieved documents.
+- **Hybrid Search:** Combines dense vector similarity search with BM25 keyword retrieval.
+- **Source Citations:** Provides document, section, page, and slide references where available.
+- **Local LLM Inference:** Uses Ollama for locally hosted language models and embeddings.
+- **Conversation Management:** Supports session-based conversations and document lifecycle management.
 - **Evaluation:** Includes retrieval and generation evaluation metrics.
-- **Containerization:** Docker and Docker Compose support.
-- **Observability:** Integrated Prometheus, Grafana, Loki, and Grafana Alloy.
-- **Kubernetes deployment:** Includes Kubernetes deployment and storage manifests.
+- **Containerization:** Supports Docker and Docker Compose deployments.
+- **Observability:** Integrates Prometheus, Grafana, Loki, and Grafana Alloy.
+- **Kubernetes Deployment:** Includes Kubernetes deployment and persistent storage manifests.
 
 ## Architecture
 
 ```text
-                  User
-                   |
-                   v
-             React Frontend
-                   |
-                   v
-              FastAPI Backend
-                   |
-          +--------+--------+
-          |                 |
-          v                 v
-     LangChain           Ollama
-          |            (LLM + Embeddings)
-          |
-          v
-     Hybrid Retrieval
-          |
-          v
-        Qdrant
-      Vector Database
-          |
-          v
-    Retrieved Context
-          |
-          v
-    Answer Generation
-          |
-          v
-    Response + Sources
+                       User
+                         |
+                         v
+                   React Frontend
+                         |
+                         v
+                    FastAPI Backend
+                         |
+              +----------+----------+
+              |                     |
+              v                     v
+        Document Ingestion       RAG Pipeline
+              |                     |
+              v                     v
+       Text Extraction         Hybrid Retrieval
+              |                     |
+              v                     v
+         Text Chunking            Qdrant
+              |                     |
+              v                     v
+       Ollama Embeddings      Retrieved Context
+              |                     |
+              +----------+----------+
+                         |
+                         v
+                   Ollama LLM
+                         |
+                         v
+                Answer Generation
+                         |
+                         v
+                 Answer + Sources
 ```
 
 ## Technology Stack
 
 | Component | Technology |
 |---|---|
-| Language | Python |
+| Programming Language | Python 3.13+ |
 | LLM Framework | LangChain |
 | LLM | Ollama – Qwen3 4B |
 | Embedding Model | Qwen3-Embedding 4B |
@@ -86,31 +89,84 @@ ZX-BANK-PROJECT/
 │   ├── evaluation/      # RAG evaluation
 │   └── api/             # FastAPI application
 │
-├── frontend/            # React application
-├── scripts/             # Ingestion scripts
-├── tests/                # Automated tests
+├── frontend/            # React frontend
+├── scripts/             # Document ingestion scripts
+├── tests/               # Automated tests
 ├── data/benchmark/      # Evaluation dataset
+├── dataset/              # Source documents (not committed)
 ├── monitoring/          # Monitoring and logging configuration
 ├── k8s/                  # Kubernetes manifests
 │
-├── dataset/              # Source documents (not committed)
 ├── .env.example          # Environment template
 ├── requirements.txt
 ├── docker-compose.yml
 └── README.md
 ```
 
-## Prerequisites
+## Document Ingestion and PDF Upload
 
-Ensure the following tools are installed:
+The application supports two document ingestion workflows.
+
+### 1. Preloaded Knowledge Base
+
+The initial ZX Bank knowledge base is indexed using the ingestion script.
+
+Supported formats:
+
+- PDF
+- DOCX
+- PPTX
+- HTML
+- Markdown
+
+The ingestion pipeline performs:
+
+1. Document loading and text extraction.
+2. Content cleaning and preprocessing.
+3. Text chunking with configurable overlap.
+4. Embedding generation using Ollama.
+5. Vector indexing in Qdrant.
+
+Run the ingestion pipeline:
+
+```bash
+python scripts/ingest.py --reset
+```
+
+### 2. Dynamic PDF Upload
+
+Users can upload PDF documents directly through the React application.
+
+The upload workflow:
+
+1. **Upload:** The PDF is submitted through the frontend to the FastAPI backend.
+2. **Extraction:** Text is extracted from the uploaded document.
+3. **Chunking:** Extracted content is divided into smaller, overlapping chunks.
+4. **Embedding:** Ollama generates embeddings for the document chunks.
+5. **Indexing:** Embeddings and metadata are stored in Qdrant.
+6. **Retrieval:** Users can ask questions about the uploaded document.
+7. **Generation:** The LLM generates responses using the retrieved context and provides source references.
+
+### PDF Upload Data Lifecycle
+
+- Uploaded PDF files are processed temporarily and deleted after indexing.
+- Extracted text chunks and embeddings are stored in Qdrant.
+- Uploaded documents are indexed into session-scoped collections named `zx_bank_uploads_<session_id>`.
+- Clearing a conversation deletes its associated upload collection.
+
+This separates the preloaded ZX Bank knowledge base from dynamically uploaded documents.
+
+## Getting Started
+
+### Prerequisites
+
+Install the following:
 
 - Python 3.13+
 - Node.js and npm
 - Docker and Docker Compose
 - Ollama
 - Git
-
-## Getting Started
 
 ### 1. Clone the Repository
 
@@ -128,7 +184,7 @@ Create your environment file:
 cp .env.example .env
 ```
 
-Configure the required variables:
+Configure the required settings:
 
 | Variable | Description |
 |---|---|
@@ -144,23 +200,25 @@ Configure the required variables:
 
 Refer to `.env.example` for the complete configuration.
 
-**Note:** When running inside Docker Compose, use service names such as `http://ollama:11434` and `http://qdrant:6333`. When running directly on the host, use the appropriate localhost URLs.
+Use Docker service names for inter-container communication and localhost URLs when running services directly on the host.
 
 ### 3. Install Python Dependencies
+
+Create a virtual environment:
 
 ```bash
 python -m venv .venv
 ```
 
-Activate the environment:
+Activate it:
 
-**Windows**
+**Windows:**
 
 ```powershell
 .venv\Scripts\activate
 ```
 
-**Linux / macOS**
+**Linux / macOS:**
 
 ```bash
 source .venv/bin/activate
@@ -176,10 +234,11 @@ pip install -r requirements.txt
 
 ```bash
 ollama pull qwen3:4b
+
 ollama pull qwen3-embedding:4b
 ```
 
-Ensure Ollama is running before proceeding.
+Ensure Ollama is running before starting the application.
 
 ### 5. Start Qdrant
 
@@ -193,27 +252,23 @@ docker run -d \
   qdrant/qdrant
 ```
 
-Verify the service:
+Verify Qdrant:
 
 ```bash
 curl http://localhost:6333/collections
 ```
 
-### 6. Ingest Documents
+### 6. Ingest the Knowledge Base
 
-Index the ZX Bank knowledge base:
+Place the ZX Bank source documents in the `dataset/` directory.
+
+Run:
 
 ```bash
-PYTHONPATH=. python scripts/ingest.py --reset
+python scripts/ingest.py --reset
 ```
 
-The ingestion pipeline performs:
-
-1. Document loading.
-2. Text extraction and preprocessing.
-3. Text chunking.
-4. Embedding generation.
-5. Vector indexing in Qdrant.
+The script loads, processes, chunks, embeds, and indexes the documents into Qdrant.
 
 The `--reset` option rebuilds the configured collection.
 
@@ -223,11 +278,11 @@ The `--reset` option rebuilds the configured collection.
 python -m uvicorn src.api.server:app --reload --port 8000
 ```
 
-Backend endpoints:
+Backend:
 
 - API: http://localhost:8000
-- Swagger documentation: http://localhost:8000/docs
-- Health check: http://localhost:8000/health
+- Swagger Documentation: http://localhost:8000/docs
+- Health Check: http://localhost:8000/health
 
 ### 8. Start the Frontend
 
@@ -256,15 +311,15 @@ http://localhost:5173
 | `/documents/upload` | POST | Upload and index a document |
 | `/conversations/{session_id}` | DELETE | Clear conversation history |
 
-Interactive API documentation is available at:
+Interactive API documentation:
 
-`http://localhost:8000/docs`
+http://localhost:8000/docs
 
 ## Docker Deployment
 
 The application supports containerized deployment using Docker Compose.
 
-### Start Services
+### Build and Start Services
 
 ```bash
 docker compose config
@@ -274,19 +329,21 @@ docker compose build
 docker compose up -d
 ```
 
-Check service status:
+Check running services:
 
 ```bash
 docker compose ps
 ```
 
-View application logs:
+View logs:
 
 ```bash
 docker compose logs -f backend
 ```
 
 ### Initialize Ollama Models
+
+Models need to be pulled after starting the Ollama container:
 
 ```bash
 docker compose exec ollama ollama pull qwen3:4b
@@ -304,9 +361,9 @@ docker compose exec ollama ollama pull qwen3-embedding:4b
 | Qdrant | http://localhost:6333 |
 | Ollama | http://localhost:11434 |
 
-Docker named volumes provide persistent storage for application data and downloaded models.
+Docker named volumes provide persistent storage for Qdrant data and downloaded Ollama models.
 
-To stop services:
+Stop services:
 
 ```bash
 docker compose down
@@ -316,16 +373,16 @@ Avoid `docker compose down -v` unless you intend to delete persistent volumes.
 
 ## Monitoring and Observability
 
-The project includes an observability stack for monitoring application performance and collecting service logs.
+The project includes an observability stack for collecting metrics and centralizing application logs.
 
-| Component | Purpose |
+| Component | Responsibility |
 |---|---|
-| Prometheus | Metrics collection |
-| Grafana | Monitoring dashboards |
+| Prometheus | Metrics collection and storage |
+| Grafana | Monitoring dashboards and visualization |
 | Loki | Centralized log aggregation |
 | Grafana Alloy | Telemetry collection and forwarding |
 
-Start the monitoring stack:
+### Start Monitoring
 
 ```bash
 cd monitoring
@@ -337,23 +394,35 @@ Access Grafana:
 
 http://localhost:3000
 
-Configure credentials through environment variables rather than committing them to the repository.
+Prometheus:
+
+http://localhost:9090
+
+Loki:
+
+http://localhost:3100
+
+Alloy:
+
+http://localhost:12345
+
+Grafana is configured to use Prometheus and Loki as data sources.
+
+Configure Grafana credentials securely through environment variables.
 
 ## Kubernetes Deployment
 
 Kubernetes manifests are available in the `k8s/` directory.
 
-Available manifests:
-
 | Manifest | Responsibility |
 |---|---|
 | `storage.yaml` | Persistent storage |
-| `qdrant.yaml` | Vector database |
-| `ollama.yaml` | LLM inference service |
+| `qdrant.yaml` | Vector database deployment |
+| `ollama.yaml` | LLM inference deployment |
 | `backend.yaml` | FastAPI backend |
 | `frontend.yaml` | React frontend |
 
-Apply the manifests:
+### Deploy to Kubernetes
 
 ```bash
 kubectl apply -f k8s/storage.yaml
@@ -367,12 +436,14 @@ kubectl apply -f k8s/backend.yaml
 kubectl apply -f k8s/frontend.yaml
 ```
 
-Verify deployment:
+### Verify Deployment
 
 ```bash
 kubectl get pods
 
 kubectl get services
+
+kubectl get pvc
 ```
 
 ## Testing
@@ -385,9 +456,9 @@ python -m pytest tests/ -v
 
 ## RAG Evaluation
 
-The project includes retrieval and generation evaluation.
+The application includes retrieval and generation evaluation using RAGAS and custom metrics.
 
-Metrics include:
+Evaluation metrics include:
 
 - Recall@K
 - Precision@K
@@ -416,6 +487,7 @@ print(report.generation)
 
 ```bash
 docker ps
+
 curl http://localhost:6333/collections
 ```
 
@@ -423,6 +495,7 @@ curl http://localhost:6333/collections
 
 ```bash
 ollama list
+
 ollama serve
 ```
 
@@ -442,23 +515,28 @@ docker compose logs -f
 
 ```bash
 cd frontend
+
 npm install
+
 npm run dev
 ```
 
 ## Security and Configuration
 
-- Keep `.env` files and credentials out of version control.
-- Use `.env.example` for documenting required environment variables.
-- Do not commit datasets, generated secrets, or local environment directories.
+- Never commit `.env` files, passwords, API keys, or generated secrets.
+- Use `.env.example` to document required environment variables.
+- Exclude datasets, virtual environments, and generated files from version control.
 - Restrict access to internal services and management endpoints.
 - Configure authentication and authorization before exposing the application publicly.
+- Avoid publishing sensitive document content or credentials in logs.
 
-## License
+## Additional Documentation
 
-Add the appropriate license information before distributing this project.
+Refer to `LEARNING_NOTES.md` for detailed explanations of LangChain components, document loaders, text splitting, embeddings, hybrid retrieval, RAG chains, and evaluation concepts.
+
 
 ---
 
-**ZX Bank AI Knowledge Assistant**  
+**ZX Bank – AI Knowledge Assistant**
+
 Built with LangChain, Ollama, Qdrant, FastAPI, React, Docker, and Kubernetes.
